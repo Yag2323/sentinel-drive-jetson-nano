@@ -1,0 +1,17 @@
+{
+  "reverse_left": false,
+  "reverse_right": false,
+  "left_trim": 1.0,
+  "right_trim": 0.98,
+  "deadband_duty": 0.6,
+  "cruise_duty": 0.75,
+  "max_duty": 0.98,
+  "left_deadband_duty": 0.6,
+  "right_deadband_duty": 0.6,
+  "left_cruise_duty": 0.75,
+  "right_cruise_duty": 0.735,
+  "left_max_duty": 0.98,
+  "right_max_duty": 0.9604,
+  "calibrated_at_voltage": 7.688,
+  "calibration_date": "2026-07-24"
+}

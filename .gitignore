@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Local environments
+.venv/
+venv/
+venv_jetson/
+env/
+
+# Third-party checkout and model artifacts
+yolov5_v6/
+*.pt
+*.onnx
+*.engine
+*.plan
+
+# Runtime evidence and generated results
+evidence/
+results/
+outputs/
+output/
+diagnostics/
+build_manifest_*.json
+*.csv
+
+# Deployment backups and temporary files
+*.bak
+*.backup
+*.pre_*.py
+.*.tmp
+tmp/
+work/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Local secrets or machine configuration
+.env
+.env.*
+*.pem
+*.key

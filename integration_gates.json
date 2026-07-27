@@ -1,0 +1,56 @@
+{
+  "schema_version": 2,
+  "physical_motion_authorized": false,
+  "authorization_integrity_status": "LOCKED",
+  "authorization_rule": "All required gates must pass with current evidence and artifact hashes; physical motion must still be explicitly confirmed at run time.",
+  "gates": {
+    "camera_orientation": {
+      "passed": false,
+      "classification": "UNVERIFIED",
+      "integrity_status": "UNRECORDED",
+      "evidence": "Run validation_manager.py confirm-camera-orientation after viewing the live flip-method=2 CSI feed."
+    },
+    "motor_mapping_software": {
+      "passed": false,
+      "classification": "UNVERIFIED",
+      "integrity_status": "UNRECORDED",
+      "evidence": "Run validation_manager.py record-self-test to execute and record the hardware-free integration self-test."
+    },
+    "yolo_current_regression": {
+      "passed": false,
+      "classification": "PRIOR_TEST_EVIDENCE",
+      "integrity_status": "UNRECORDED",
+      "evidence": "Historical real-CSI result exists; rerun yolo_csi_benchmark.py for current-build evidence."
+    },
+    "ipm_physical_calibration": {
+      "passed": false,
+      "classification": "UNVERIFIED",
+      "integrity_status": "UNRECORDED",
+      "evidence": "Run calibrate_ipm.py on the physical track, then record-ipm-calibration."
+    },
+    "ipm_live_dry_run": {
+      "passed": false,
+      "classification": "UNVERIFIED",
+      "integrity_status": "UNRECORDED",
+      "evidence": "Run ipm_live_dry_run.py after physical IPM calibration."
+    },
+    "integrated_control_dry_run": {
+      "passed": false,
+      "classification": "UNVERIFIED",
+      "integrity_status": "UNRECORDED",
+      "evidence": "Run integrated_control_dry_run.py and exercise DRIVE and obstacle STOP."
+    },
+    "raised_motor_adapter": {
+      "passed": false,
+      "classification": "UNVERIFIED",
+      "integrity_status": "UNRECORDED",
+      "evidence": "Run motor_adapter_raised_test.py with both wheels raised."
+    },
+    "short_floor_steering": {
+      "passed": false,
+      "classification": "UNVERIFIED",
+      "integrity_status": "UNRECORDED",
+      "evidence": "Run steering_floor_validation.py only after the raised adapter gate passes; verify brief left and right corrections on a guarded floor lane."
+    }
+  }
+}

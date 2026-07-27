@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "verification_state": "SOFTWARE_INITIAL_VALUES_NOT_PHYSICALLY_TUNED",
+  "kp": 0.3,
+  "ki": 0.0,
+  "kd": 0.04,
+  "integral_limit": 0.35,
+  "derivative_filter_alpha": 0.25,
+  "steering_limit": 0.18,
+  "lane_confidence_minimum": 0.55,
+  "partial_lane_timeout_s": 0.5,
+  "allow_partial_lane_motion": false,
+  "camera_stale_timeout_s": 0.25,
+  "yolo_image_size": 256,
+  "yolo_confidence_threshold": 0.45,
+  "yolo_iou_threshold": 0.45,
+  "yolo_stale_timeout_s": 0.75,
+  "yolo_max_frame_lag": 8,
+  "command_lease_s": 0.35,
+  "motor_voltage_stop_v": 6.6,
+  "maximum_motor_voltage_v": 8.6,
+  "post_command_settle_s": 0.06,
+  "slow_speed_scale": 0.0,
+  "partial_lane_speed_scale": 0.0,
+  "notes": [
+    "PID structure is implemented, but gains are provisional until a motor-disabled dry run and short guarded track tuning are completed.",
+    "Integral action starts disabled to prevent wind-up during initial physical validation."
+  ]
+}

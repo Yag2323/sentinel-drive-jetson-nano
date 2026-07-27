@@ -1,0 +1,24 @@
+# DOCUMENTATION-ONLY COMPATIBILITY NOTES — DO NOT RUN `pip install -r` BLINDLY.
+#
+# The Jetson Nano / JetPack 4.x software stack uses NVIDIA-specific CUDA
+# PyTorch wheels and a system OpenCV build with GStreamer support. Replacing
+# those packages with generic PyPI wheels can remove GPU or CSI-camera support.
+#
+# Required imports used by this project:
+#   Python 3.6-compatible interpreter
+#   torch (NVIDIA JetPack-compatible CUDA build)
+#   numpy
+#   cv2 / OpenCV with GStreamer enabled
+#   PyGObject (`gi`) with Gst and GstApp
+#   GStreamer elements: nvarguscamerasrc, nvvidconv, videoconvert, appsink
+#   smbus or smbus2 for the read-only dashboard INA219 sampler
+#
+# The exact installed OS, L4T, CUDA, torch, torchvision, OpenCV, NumPy,
+# GStreamer and PyGObject versions are UNKNOWN — not verifiable from this
+# public source snapshot. Capture them with jetson_perception_preflight.py and
+# system package queries on the target Jetson before claiming reproducibility.
+#
+# YOLOv5 source and model assets are deliberately absent. Use:
+#   python3 prepare_yolov5_v6.py
+# This pins YOLOv5 v6.0 and validates the official weights without changing
+# the JetPack Python stack.
