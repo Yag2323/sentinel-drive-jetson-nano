@@ -117,6 +117,27 @@ class SlowRightPwmController(FakeMotorController):
         )
 
 
+class SlowLeftPastDeadlineController(FakeMotorController):
+    """Hold the first left EN write beyond a caller observation deadline."""
+
+    def __init__(self, reverse_left=False, reverse_right=False):
+        super(SlowLeftPastDeadlineController, self).__init__(
+            reverse_left=reverse_left,
+            reverse_right=reverse_right,
+        )
+        self.pwm_writes = []
+
+    def set_channel_duty(self, channel, duty):
+        channel = int(channel)
+        duty = float(duty)
+        self.pwm_writes.append((channel, duty, time.monotonic()))
+        if channel == 0 and duty > 0.0:
+            time.sleep(0.12)
+        return super(SlowLeftPastDeadlineController, self).set_channel_duty(
+            channel, duty
+        )
+
+
 class OneFailedOffController(FakeMotorController):
     def __init__(self, reverse_left=False, reverse_right=False):
         self.off_attempts = 0
@@ -404,6 +425,45 @@ def main():
     )
     blocked_write_output.close()
 
+    # If the first (left) EN transaction itself crosses an observation
+    # deadline, command() must stop without issuing a later non-zero write to
+    # the right EN channel.
+    expired_between_writes_output = SafeMotorOutput(
+        motor_config=motor_config,
+        controller_config=controller_config,
+        controller_factory=SlowLeftPastDeadlineController,
+    )
+    between_write_deadline = time.monotonic() + 0.08
+    try:
+        expired_between_writes_output.command(
+            base,
+            base,
+            deadline_monotonic=between_write_deadline,
+            deadline_reason="TEST_OBSERVATION_DEADLINE_EXPIRED",
+        )
+        raise AssertionError(
+            "A right EN write was allowed after the observation deadline."
+        )
+    except RuntimeError:
+        pass
+    right_nonzero_writes = [
+        item
+        for item in expired_between_writes_output.controller.pwm_writes
+        if item[0] == expired_between_writes_output.RIGHT_ENB
+        and item[1] > 0.0
+    ]
+    require(
+        not right_nonzero_writes,
+        "A non-zero right EN write occurred after the left write crossed "
+        "the observation deadline.",
+    )
+    require(
+        expired_between_writes_output.hardware_off_confirmed
+        and expired_between_writes_output.last_duties == (0.0, 0.0),
+        "Between-write deadline expiry did not force hardware OFF.",
+    )
+    expired_between_writes_output.close()
+
     retry_output = SafeMotorOutput(
         motor_config=motor_config,
         controller_config=controller_config,
@@ -474,6 +534,36 @@ def main():
         pass
     deadline_output.close()
 
+    # Prove a caller's shorter perception deadline is enforced by the motor
+    # watchdog even if the control loop never returns to refresh or stop.
+    perception_deadline_output = SafeMotorOutput(
+        motor_config=motor_config,
+        controller_config=controller_config,
+        controller_factory=FakeMotorController,
+    )
+    perception_deadline = time.monotonic() + 0.16
+    deadline_result = perception_deadline_output.command(
+        base,
+        base,
+        deadline_monotonic=perception_deadline,
+        deadline_reason="PERCEPTION_DEADLINE_EXPIRED",
+    )
+    require(
+        deadline_result["command_expiry_reason"]
+        == "PERCEPTION_DEADLINE_EXPIRED",
+        "Short perception deadline was not bound to the command.",
+    )
+    time.sleep(0.25)
+    require(
+        perception_deadline_output.watchdog_fault
+        == "PERCEPTION_DEADLINE_EXPIRED"
+        and perception_deadline_output.watchdog_trip_count == 1
+        and perception_deadline_output.hardware_off_confirmed
+        and perception_deadline_output.last_duties == (0.0, 0.0),
+        "Perception deadline did not independently force hardware OFF.",
+    )
+    perception_deadline_output.close()
+
     sagging_output = SafeMotorOutput(
         motor_config=motor_config,
         controller_config=controller_config,
@@ -501,8 +591,10 @@ def main():
     print("Late-refresh lease interlock: PASS")
     print("Whole-transaction fail-safe OFF: PASS")
     print("Interrupt/in-progress I2C fail-safe OFF: PASS")
+    print("Between-EN-write deadline interlock: PASS")
     print("Failed-OFF retry and restart latch: PASS")
     print("Independent hard motion deadline and duration meter: PASS")
+    print("Observation-bound command expiry watchdog: PASS")
     print("Pre/post-command voltage guard: PASS")
     print("Strict configuration validation: PASS")
     return 0

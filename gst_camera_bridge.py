@@ -23,6 +23,7 @@ DEFAULT_CSI_FLIP_METHOD = 2
 
 def build_csi_pipeline(
     sensor_id=0,
+    sensor_mode=None,
     capture_width=1280,
     capture_height=720,
     output_width=640,
@@ -31,8 +32,13 @@ def build_csi_pipeline(
     flip_method=DEFAULT_CSI_FLIP_METHOD,
 ):
     """Return the single canonical CSI pipeline used by this project."""
+    sensor_mode_property = (
+        " sensor-mode={}".format(int(sensor_mode))
+        if sensor_mode is not None
+        else ""
+    )
     return (
-        "nvarguscamerasrc sensor-id={sensor_id} ! "
+        "nvarguscamerasrc sensor-id={sensor_id}{sensor_mode_property} ! "
         "video/x-raw(memory:NVMM), "
         "width=(int){capture_width}, "
         "height=(int){capture_height}, "
@@ -49,6 +55,7 @@ def build_csi_pipeline(
         "max-buffers=1 drop=true"
     ).format(
         sensor_id=int(sensor_id),
+        sensor_mode_property=sensor_mode_property,
         capture_width=int(capture_width),
         capture_height=int(capture_height),
         output_width=int(output_width),
@@ -64,6 +71,7 @@ class GstCamera(object):
     def __init__(
         self,
         sensor_id=0,
+        sensor_mode=None,
         capture_width=1280,
         capture_height=720,
         output_width=640,
@@ -80,6 +88,7 @@ class GstCamera(object):
         self._pts_origin_monotonic = None
         self.pipeline_description = build_csi_pipeline(
             sensor_id=sensor_id,
+            sensor_mode=sensor_mode,
             capture_width=capture_width,
             capture_height=capture_height,
             output_width=output_width,

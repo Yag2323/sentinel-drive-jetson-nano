@@ -25,10 +25,10 @@ source hashes still match the deployed build.
 |---|---|---|---|
 | YOLOv5s real-CSI baseline, 2026-07-26 | CUDA FP16; 30.0 s; 213 frames; pinned YOLOv5 v6 commit | complete-window FPS `7.078025127419382`; inference-only FPS `8.80755624811622`; mean inference `113.53887183109187 ms`; `passed=true` | `PRIOR TEST EVIDENCE` |
 | YOLOv5n real-CSI benchmark, 2026-07-26 | CUDA FP16; 30.0 s; 249 frames; 320 image size | complete-window FPS `8.283126567668365`; inference-only FPS `10.650660666074126`; mean inference `93.89088915256971 ms`; p95 source-to-result `194.0077229992312 ms`; `passed=true` | `PRIOR TEST EVIDENCE` |
-| IPM physical-CSI dry run, 2026-07-26 | Motors not imported; centred reference; 30.0 s; 383 frames | average loop `13.25091753132572 FPS`; full/usable lane `99.73890339425587%`; mean confidence `0.6978643834708359`; mean absolute offset `0.0059364265054359855`; `passed=true` | `PRIOR TEST EVIDENCE` |
-| Integrated perception/control dry run, 2026-07-26 | Physical CSI; motors disabled; 60.0 s; 489 frames | average control `8.753886744693606 FPS`; YOLO fresh rate `97.75051124744377%`; full lane `95.70552147239263%`; usable lane `98.97750511247443%`; 41 object-stop frames; 64 lane-stop frames; zero mapped-duty violations; `passed=true` | `PRIOR TEST EVIDENCE` |
+| IPM physical-CSI dry run used in the final report, 2026-07-26 | Motors not imported; centred reference; 30.0 s; 343 frames | average loop `11.803985748417533 FPS`; full/usable lane `99.12536443148689%`; mean confidence `0.8484607454093648`; mean absolute offset `0.013785545043762011`; `passed=true` | `PRIOR TEST EVIDENCE` |
+| Integrated perception/control dry run used in the final report, 2026-07-26 | Physical CSI; motors disabled; 60.0 s; 497 frames | average control `8.737179653391355 FPS`; YOLO fresh rate `95.57344064386318%`; full lane `96.17706237424547%`; usable lane `99.19517102615694%`; 404 DRIVE frames; 45 object-stop frames; 23 lane-stop frames; zero mapped-duty violations; `passed=true` | `PRIOR TEST EVIDENCE` |
 
-The integrated dry-run safety reasons include 41
+The report-aligned integrated dry-run safety reasons include 45
 `OBJECT_DETECTED_PERSON` stop frames. This is direct evidence that the
 object-detection result reached the supervisor and produced STOP without
 energising the motors.
@@ -78,10 +78,10 @@ files can be checked without exposing local information.
 | `yolov5s_csi_20260726T121156Z.csv` | `8c8abc8a4ec180d96121cb473bbf1f84b3d728a0aea88c08b93b3206f0b8ed4a` |
 | `yolov5n_csi_20260726T121601Z.json` | `438468ad1367fb8088f56ce47ac75536c45957ea10259d273d4708cc10b11b7d` |
 | `yolov5n_csi_20260726T121601Z.csv` | `08f0baabddafbe2ccbf18e5b8e6bd34a289fd1f74f0c0aa9c546d41ec0c78e45` |
-| `ipm_dry_run_20260726T141326Z.json` | `c3ea38bc05ae13ed2d93e0fda8a1d77cd389f4bbde29064308c8e1f621911903` |
-| `ipm_dry_run_20260726T141326Z.csv` | `b765cea0a8521a3b7f985258db81d54474f9c36a156cd5ed6930fcb486eef77b` |
-| `integrated_dry_20260726T143002Z.json` | `41714cf07790f08c7e5ab6b019c22b936c4c7a976901360f8a77ca92804f43ee` |
-| `integrated_dry_20260726T143002Z.csv` | `97ab138374bf35c86ab506b62a44e21ec1205c6746826978765ec17cf2b09dd4` |
+| `ipm_dry_run_20260726T162241Z.json` | `697a6d8998382859d71fc2c061acfa9d22e3e9aebe5554c47b7a30ed9aee8b7c` |
+| `ipm_dry_run_20260726T162241Z.csv` | `a96e3e1a05a66f60fcedaadfbc7806e0254e5ba6796dec76464a6e09ceaced42` |
+| `integrated_dry_20260726T162715Z.json` | `73f12e79c2e0be28c23d092144b5ca91a99533af50e8ac5a8e133661dd7afa25` |
+| `integrated_dry_20260726T162715Z.csv` | `e0e82501649212210d34eed6632fefe1cbaef971571e33d931294252a7593d65` |
 
 ## Current public-build status
 

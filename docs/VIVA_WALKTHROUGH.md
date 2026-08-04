@@ -124,15 +124,20 @@ Headline values:
 |---|---:|
 | YOLOv5n complete physical-CSI throughput | `8.28 FPS` |
 | YOLOv5n inference-only equivalent | `10.65 FPS` |
-| IPM physical-CSI dry-run throughput | `13.25 FPS` |
-| IPM full-lane rate | `99.74%` |
-| Integrated motor-disabled control rate | `8.75 FPS` |
-| Fresh YOLO results in the integrated run | `97.75%` |
-| Object-stop frames in the integrated run | `41` |
-| Lane-stop frames in the integrated run | `64` |
+| IPM physical-CSI dry-run throughput | `11.804 FPS` |
+| IPM full-lane rate | `99.13%` |
+| Integrated motor-disabled control rate | `8.737 FPS` |
+| Fresh YOLO results in the integrated run | `95.57%` |
+| DRIVE frames in the integrated run | `404` |
+| Object-stop frames in the integrated run | `45` |
+| Lane-stop frames in the integrated run | `23` |
 
 Explain that exact unrounded values and artifact SHA-256 identifiers are in the
 register, while README values are rounded for readability.
+
+Then open `docs/perception_capabilities.md`. It gives the shortest defensible
+answer to the difference between line perception, line-following motion,
+object-triggered STOP, generic stop-sign recognition and obstacle avoidance.
 
 ## 7. Finish with engineering judgement
 

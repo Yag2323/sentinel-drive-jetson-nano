@@ -14,6 +14,20 @@ import numpy as np
 import torch
 
 
+# The exported Jetson is configured for the 5 W profile with two CPU cores.
+# Unbounded OpenMP/PyTorch worker pools oversubscribe those cores and starve
+# the safety-critical lane loop.  CUDA still performs model inference; these
+# limits apply to CPU preprocessing and postprocessing only.
+try:
+    torch.set_num_threads(1)
+except Exception:
+    pass
+try:
+    torch.set_num_interop_threads(1)
+except Exception:
+    pass
+
+
 PROJECT_DIRECTORY = os.path.dirname(os.path.abspath(__file__))
 YOLO_DIRECTORY = os.path.join(PROJECT_DIRECTORY, "yolov5_v6")
 DEFAULT_WEIGHTS_PATH = os.path.join(YOLO_DIRECTORY, "yolov5n.pt")
@@ -70,6 +84,7 @@ class YoloV5Detector(object):
     ):
         if not os.path.isfile(weights_path):
             raise RuntimeError("YOLO weights not found: {}".format(weights_path))
+        self.weights_path = os.path.abspath(weights_path)
         self.device = torch.device(
             "cuda:0" if torch.cuda.is_available() else "cpu"
         )
@@ -102,6 +117,18 @@ class YoloV5Detector(object):
             warmup = warmup.half()
         with torch.no_grad():
             self.model(warmup)[0]
+        if self.device.type == "cuda":
+            torch.cuda.synchronize()
+
+    def warmup_for_frame_shape(self, frame_height, frame_width, iterations=3):
+        """Warm the exact letterboxed tensor shape used by the live camera."""
+        frame = np.zeros(
+            (int(frame_height), int(frame_width), 3), dtype=np.uint8
+        )
+        timings = []
+        for _index in range(max(1, int(iterations))):
+            timings.append(float(self.infer(frame)["end_to_end_ms"]))
+        return timings
 
     def _prepare(self, frame):
         resized = letterbox(
@@ -314,7 +341,13 @@ def draw_detections(image, detections, corridor, path_polygon=None):
 
 
 class AsyncYoloWorker(object):
-    """Single-frame asynchronous worker with no stale-frame backlog."""
+    """Asynchronous latest-frame worker with one bounded pending slot.
+
+    Inference may be busy on one frame while the queue retains exactly one
+    newer frame.  Further submissions replace that pending frame.  This keeps
+    memory bounded and prevents a FIFO backlog, but unlike the old worker it
+    does not sit idle until the slow lane-control loop happens to submit again.
+    """
 
     def __init__(self, detector):
         self.detector = detector
@@ -322,6 +355,9 @@ class AsyncYoloWorker(object):
         self.lock = threading.Lock()
         self.stop_event = threading.Event()
         self.busy = False
+        self.accepted_submissions = 0
+        self.replaced_submissions = 0
+        self.rejected_submissions = 0
         self.latest = {
             "has_result": False,
             "detections": [],
@@ -334,6 +370,7 @@ class AsyncYoloWorker(object):
             "source_frame": 0,
             "source_capture_monotonic": None,
             "source_pts_ns": None,
+            "source_frame_image": None,
             "result_time": 0.0,
             "error": None,
         }
@@ -350,26 +387,43 @@ class AsyncYoloWorker(object):
         capture_monotonic=None,
         source_pts_ns=None,
     ):
+        if self.stop_event.is_set():
+            with self.lock:
+                self.rejected_submissions += 1
+            return False
         if capture_monotonic is None:
             capture_monotonic = time.monotonic()
-        with self.lock:
-            if self.busy:
-                return False
-            self.busy = True
-        try:
-            self.frame_queue.put_nowait(
-                (
-                    int(frame_number),
-                    float(capture_monotonic),
-                    source_pts_ns,
-                    frame.copy(),
-                )
-            )
-            return True
-        except queue.Full:
-            with self.lock:
-                self.busy = False
-            return False
+        item = (
+            int(frame_number),
+            float(capture_monotonic),
+            source_pts_ns,
+            frame.copy(),
+        )
+        replaced = False
+        while True:
+            try:
+                self.frame_queue.put_nowait(item)
+                with self.lock:
+                    self.accepted_submissions += 1
+                    if replaced:
+                        self.replaced_submissions += 1
+                return True
+            except queue.Full:
+                # Keep only the newest pending frame.  The worker's in-flight
+                # frame is never interrupted; only the not-yet-processed slot
+                # is replaced.
+                try:
+                    pending = self.frame_queue.get_nowait()
+                    self.frame_queue.task_done()
+                    if pending is None:
+                        with self.lock:
+                            self.rejected_submissions += 1
+                        return False
+                    replaced = True
+                except queue.Empty:
+                    # The worker consumed the pending item between Full and
+                    # get_nowait(); retry the non-blocking put.
+                    continue
 
     def snapshot(self, current_frame_number=None):
         with self.lock:
@@ -377,6 +431,10 @@ class AsyncYoloWorker(object):
             result["detections"] = [dict(item) for item in self.latest["detections"]]
             result["corridor"] = dict(self.latest["corridor"])
             result["busy"] = bool(self.busy)
+            result["pending_frames"] = int(self.frame_queue.qsize())
+            result["accepted_submissions"] = int(self.accepted_submissions)
+            result["replaced_submissions"] = int(self.replaced_submissions)
+            result["rejected_submissions"] = int(self.rejected_submissions)
             now = time.monotonic()
             source_time = self.latest.get("source_capture_monotonic")
             result["age_seconds"] = (
@@ -403,7 +461,10 @@ class AsyncYoloWorker(object):
             except queue.Empty:
                 continue
             if item is None:
+                self.frame_queue.task_done()
                 break
+            with self.lock:
+                self.busy = True
             frame_number, capture_monotonic, source_pts_ns, frame = item
             try:
                 result = self.detector.infer(frame)
@@ -411,6 +472,10 @@ class AsyncYoloWorker(object):
                 result["source_frame"] = frame_number
                 result["source_capture_monotonic"] = capture_monotonic
                 result["source_pts_ns"] = source_pts_ns
+                # Preserve the exact image that produced these detections.
+                # The array is immutable after publication and the bounded
+                # latest-result state retains only one such frame.
+                result["source_frame_image"] = frame
                 result["result_time"] = time.monotonic()
                 result["error"] = None
                 with self.lock:
@@ -425,8 +490,22 @@ class AsyncYoloWorker(object):
 
     def stop(self):
         self.stop_event.set()
-        try:
-            self.frame_queue.put_nowait(None)
-        except queue.Full:
-            pass
-        self.thread.join(timeout=5.0)
+        # Do not leave a pending full-resolution frame (or an unconsumed
+        # sentinel) behind when shutdown races an in-flight inference.  The
+        # worker polls stop_event every 100 ms, so no sentinel is required.
+        while True:
+            try:
+                self.frame_queue.get_nowait()
+                self.frame_queue.task_done()
+            except queue.Empty:
+                break
+        if self.thread.ident is not None:
+            self.thread.join(timeout=5.0)
+        if self.thread.is_alive():
+            raise RuntimeError("YOLO worker did not stop within 5 seconds.")
+        while True:
+            try:
+                self.frame_queue.get_nowait()
+                self.frame_queue.task_done()
+            except queue.Empty:
+                break

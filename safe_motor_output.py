@@ -142,6 +142,8 @@ class SafeMotorOutput(object):
         self.last_signs = (0, 0)
         self.last_duties = (0.0, 0.0)
         self.last_command_time = None
+        self.last_command_expiry_monotonic = None
+        self.last_command_expiry_reason = None
         self.minimum_voltage = float("inf")
         self.last_voltage = None
         self.last_stop_reason = "INITIALISED_OFF"
@@ -180,23 +182,35 @@ class SafeMotorOutput(object):
         return 0
 
     def _watchdog_loop(self):
-        interval = max(0.02, min(0.10, self.lease_seconds / 4.0))
+        # A caller safety deadline can be much shorter than the normal lease.
+        # Poll at 20 ms so a stale perception permission cannot linger for the
+        # former worst-case 100 ms interval.
+        interval = max(0.01, min(0.02, self.lease_seconds / 4.0))
         while not self.stop_event.wait(interval):
             last_command_time = self.last_command_time
+            command_expiry = self.last_command_expiry_monotonic
+            now = time.monotonic()
             lease_expired = bool(
                 last_command_time is not None
-                and time.monotonic() - last_command_time > self.lease_seconds
+                and now - last_command_time > self.lease_seconds
+            )
+            deadline_expired = bool(
+                command_expiry is not None and now >= command_expiry
             )
             retry_off = bool(self.hardware_off_retry_required)
-            if self.closed or not (lease_expired or retry_off):
+            if self.closed or not (
+                lease_expired or deadline_expired or retry_off
+            ):
                 continue
             acquired = self.lock.acquire(timeout=0.05)
             if not acquired:
                 # Software cannot de-assert PWM while the I2C lock/call is
                 # blocked. Surface this limitation; a physical disconnect or
                 # hardware OE watchdog remains the independent protection.
-                if lease_expired:
-                    self.watchdog_fault = "I2C_LOCK_UNAVAILABLE_AFTER_LEASE"
+                if lease_expired or deadline_expired:
+                    self.watchdog_fault = (
+                        "I2C_LOCK_UNAVAILABLE_AFTER_COMMAND_DEADLINE"
+                    )
                 continue
             try:
                 if self.hardware_off_retry_required:
@@ -208,25 +222,68 @@ class SafeMotorOutput(object):
                 if (
                     not self.closed
                     and self.last_command_time is not None
-                    and time.monotonic() - self.last_command_time
-                    > self.lease_seconds
+                    and self._command_expired_locked()
                 ):
-                    self._expire_lease_locked()
+                    self._expire_command_locked()
             finally:
                 self.lock.release()
 
-    def _expire_lease_locked(self):
-        """Stop and latch one lease expiry while the shared lock is held."""
-        if self.watchdog_fault == "COMMAND_LEASE_EXPIRED":
+    def _command_expired_locked(self):
+        """Return whether the lease or a stricter caller deadline expired."""
+        if self.last_command_time is None:
+            return False
+        now = time.monotonic()
+        if now - self.last_command_time > self.lease_seconds:
+            return True
+        return bool(
+            self.last_command_expiry_monotonic is not None
+            and now >= self.last_command_expiry_monotonic
+        )
+
+    def _arm_command_expiry_locked(
+        self, deadline_monotonic=None, deadline_reason=None
+    ):
+        """Arm the earliest of the fixed lease and caller safety deadline."""
+        now = time.monotonic()
+        lease_expiry = now + self.lease_seconds
+        expiry = lease_expiry
+        reason = "COMMAND_LEASE_EXPIRED"
+        if deadline_monotonic is not None:
+            deadline = float(deadline_monotonic)
+            if not math.isfinite(deadline):
+                raise ValueError("Motion deadline must be finite.")
+            if deadline < expiry:
+                expiry = deadline
+                reason = str(deadline_reason or "COMMAND_DEADLINE_EXPIRED")
+        self.last_command_time = now
+        self.last_command_expiry_monotonic = expiry
+        self.last_command_expiry_reason = reason
+
+    def _expire_command_locked(self):
+        """Stop and latch the active command's earliest expiry."""
+        reason = self.last_command_expiry_reason
+        if (
+            self.last_command_time is not None
+            and time.monotonic() - self.last_command_time
+            > self.lease_seconds
+        ):
+            reason = "COMMAND_LEASE_EXPIRED"
+        reason = str(reason or "COMMAND_LEASE_EXPIRED")
+        if self.watchdog_fault == reason:
             return
         try:
-            self._stop_locked("COMMAND_LEASE_EXPIRED")
+            self._stop_locked(reason)
             self.watchdog_trip_count += 1
-            self.watchdog_fault = "COMMAND_LEASE_EXPIRED"
+            self.watchdog_fault = reason
         except Exception as error:
             self.watchdog_fault = (
-                "COMMAND_LEASE_STOP_FAILED: {!r}".format(error)
+                "COMMAND_EXPIRY_STOP_FAILED: {!r}".format(error)
             )
+
+    def _expire_lease_locked(self):
+        """Stop and latch one lease expiry while the shared lock is held."""
+        self.last_command_expiry_reason = "COMMAND_LEASE_EXPIRED"
+        self._expire_command_locked()
 
     def _stop_locked(self, reason):
         if (
@@ -255,6 +312,8 @@ class SafeMotorOutput(object):
             self.last_signs = (0, 0)
             self.last_duties = (0.0, 0.0)
             self.last_command_time = None
+            self.last_command_expiry_monotonic = None
+            self.last_command_expiry_reason = None
             self.last_stop_reason = str(reason)
 
     def _record_hardware_off_locked(self, stopped_monotonic):
@@ -337,6 +396,7 @@ class SafeMotorOutput(object):
         right_normalized,
         reason="CONTROL_LOOP",
         deadline_monotonic=None,
+        deadline_reason="COMMAND_DEADLINE_EXPIRED",
     ):
         """Apply normalized wheel commands and refresh the watchdog lease."""
         left_normalized = float(left_normalized)
@@ -392,7 +452,9 @@ class SafeMotorOutput(object):
                     # I2C write blocks after one side energizes, the watchdog
                     # can now detect the in-progress command deadline.
                     self.last_duties = commanded_duties
-                    self.last_command_time = time.monotonic()
+                    self._arm_command_expiry_locked(
+                        deadline_monotonic, deadline_reason
+                    )
                     self.last_stop_reason = "COMMAND_WRITE_IN_PROGRESS"
                     if self.active_since_monotonic is None:
                         # Timestamp before the first non-zero EN write.  The
@@ -402,6 +464,17 @@ class SafeMotorOutput(object):
                 self.controller.set_channel_duty(
                     self.LEFT_ENA, abs(left_duty)
                 )
+                # The left EN write is an external I2C transaction and may
+                # return only after the observation or command lease has
+                # expired.  Re-check before issuing a non-zero command to the
+                # right EN channel.  Without this interlock, a delayed left
+                # write could cause a *new* right-side actuation after the
+                # permission deadline.
+                if potentially_active:
+                    self._assert_motion_deadline_allowed_locked(
+                        deadline_monotonic
+                    )
+                    self._assert_lease_refresh_allowed_locked()
                 self.controller.set_channel_duty(
                     self.RIGHT_ENB, abs(right_duty)
                 )
@@ -410,7 +483,9 @@ class SafeMotorOutput(object):
                         deadline_monotonic
                     )
                     self._assert_lease_refresh_allowed_locked()
-                    self.last_command_time = time.monotonic()
+                    self._arm_command_expiry_locked(
+                        deadline_monotonic, deadline_reason
+                    )
                 else:
                     self._stop_locked(reason)
                 self.last_stop_reason = str(reason)
@@ -430,7 +505,9 @@ class SafeMotorOutput(object):
                         deadline_monotonic
                     )
                     self._assert_lease_refresh_allowed_locked()
-                    self.last_command_time = time.monotonic()
+                    self._arm_command_expiry_locked(
+                        deadline_monotonic, deadline_reason
+                    )
                 return {
                     "left_duty": abs(float(left_duty)),
                     "right_duty": abs(float(right_duty)),
@@ -439,6 +516,10 @@ class SafeMotorOutput(object):
                     "battery_voltage": (
                         post_voltage if post_voltage is not None else pre_voltage
                     ),
+                    "command_expiry_monotonic": (
+                        self.last_command_expiry_monotonic
+                    ),
+                    "command_expiry_reason": self.last_command_expiry_reason,
                 }
             except BaseException:
                 already_stopped = (
@@ -477,16 +558,12 @@ class SafeMotorOutput(object):
             raise RuntimeError(
                 "Software command lease fault: {}".format(fault)
             )
-        if (
-            self.last_command_time is not None
-            and time.monotonic() - self.last_command_time
-            > self.lease_seconds
-        ):
+        if self._command_expired_locked():
             # Do not let a late refresh erase an expiry merely because it
             # arrived before the watchdog thread next acquired this lock.
-            self._expire_lease_locked()
+            self._expire_command_locked()
             raise RuntimeError(
-                "Software command lease expired before this refresh."
+                "Software command deadline expired before this refresh."
             )
 
     def close(self):

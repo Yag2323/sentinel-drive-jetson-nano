@@ -13,7 +13,7 @@ differential-drive control, battery monitoring and hash-bound validation
 gates. The dashboard is read-only; every physical runner is designed to stop
 when perception, timing, voltage or command freshness becomes unsafe.
 
-![Sentinel Drive prototype on the single-line test track](docs/images/prototype-on-rounded-oval-track.png)
+![Assembled Sentinel Drive physical prototype](docs/images/prototype-front-left.png)
 
 > [!IMPORTANT]
 > This repository is an auditable source and curated-evidence snapshot. It does **not**
@@ -108,10 +108,10 @@ display values are used here; exact values and SHA-256 identifiers are in the
 | YOLOv5s real CSI baseline | CUDA FP16, 30 s | 7.08 complete FPS; 8.81 inference-only FPS |
 | YOLOv5n real CSI benchmark | CUDA FP16, 30 s | 8.28 complete FPS; 10.65 inference-only FPS |
 | YOLOv5n mean inference latency | CUDA FP16 | 93.89 ms |
-| IPM lane dry run | Physical CSI, centred reference, 30 s | 13.25 FPS; 99.74% full-lane rate |
-| Integrated control dry run | Physical CSI, motors disabled, 60 s | 8.75 control FPS; 97.75% fresh YOLO |
-| Integrated object response | Same dry run | 41 object-stop frames; reason included `OBJECT_DETECTED_PERSON` |
-| Integrated lane fail-safe | Same dry run | 64 lane-stop frames |
+| IPM lane dry run | Physical CSI, centred reference, 30 s | 11.80 FPS; 99.13% full-lane rate |
+| Integrated control dry run | Physical CSI, motors disabled, 60 s | 8.74 control FPS; 95.57% fresh YOLO |
+| Integrated object response | Same dry run | 45 object-stop frames; reason `OBJECT_DETECTED_PERSON` |
+| Integrated lane fail-safe | Same dry run | 23 lane-stop frames; 404 DRIVE frames |
 | Motor calibration | 7.688 V calibration point | 0.60 deadband; 0.75 cruise; right trim 0.98 |
 | Straight-line calibration | Short guarded floor test | less than 5 cm lateral error over 0.5 m |
 
@@ -142,19 +142,25 @@ display values are used here; exact values and SHA-256 identifiers are in the
 | [`test_ipm_lane_synthetic.py`](test_ipm_lane_synthetic.py) | Dual-rail/IPM regression retained for the earlier detector path. |
 | [`robot_dashboard.py`](robot_dashboard.py) | Read-only system and camera dashboard. |
 
+The audited 5 August export also contributed tested runtime improvements to
+`gst_camera_bridge.py`, `ipm_lane.py`, `safe_motor_output.py`,
+`yolov5_runtime.py`, and `integration_self_test.py`. Local calibration files,
+ungated commissioning runners, raw logs, model weights and failed-run archives
+were deliberately not imported into the public repository.
+
 ## Photographic record
 
-| Physical prototype | Single-line circular track |
+| Physical prototype | Raw straight-line camera input |
 |---|---|
-| ![Front view of the assembled Sentinel Drive prototype](docs/images/prototype-front.png) | ![Single black-line circular test track](docs/images/single-line-circle-track.jpg) |
+| ![Front view of the assembled Sentinel Drive prototype](docs/images/prototype-front.png) | ![CSI camera view of the straight black line](docs/images/camera-view-straight.jpg) |
 
-| Camera view on a curve | Camera view on a straight |
+| Stationary single-line diagnostic | Integrated motor-disabled control dry run |
 |---|---|
-| ![CSI camera view of the curved black line](docs/images/camera-view-curve.jpg) | ![CSI camera view of the straight black line](docs/images/camera-view-straight.jpg) |
+| ![Real-CSI single-line diagnostic showing one selected tape component](docs/images/single-line-detector-diagnostic.jpg) | ![Integrated perception and control dry-run evidence](docs/images/evidence-integrated-dry-run.jpg) |
 
-| YOLOv5n physical CSI benchmark | Integrated motor-disabled control dry run |
+| YOLOv5n physical CSI benchmark | Physical IPM dry run |
 |---|---|
-| ![YOLOv5n chair detection evidence](docs/images/evidence-yolov5n-csi.jpg) | ![Integrated perception and control dry-run evidence](docs/images/evidence-integrated-dry-run.jpg) |
+| ![YOLOv5n chair detection evidence](docs/images/evidence-yolov5n-csi.jpg) | ![Physical IPM lane evidence](docs/images/evidence-ipm-dry-run.jpg) |
 
 The repository documents the generic COCO stop-sign recognition policy in code.
 An actual recognition output from the Jetson will replace the former test-prop
@@ -210,6 +216,7 @@ evidence-led demonstration of the repository. The recommended route is:
 - [Safety contract](SAFETY.md)
 - [Integration runbook](docs/INTEGRATION_RUNBOOK.md)
 - [Engineering evidence register](docs/project_evidence_register.md)
+- [Perception capability and evidence map](docs/perception_capabilities.md)
 - [Viva walkthrough](docs/VIVA_WALKTHROUGH.md)
 - [System architecture](docs/system_architecture.md)
 - [Technical handover](docs/TECHNICAL_HANDOVER.md)

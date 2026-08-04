@@ -1666,7 +1666,16 @@ class IPMLaneDetector(object):
             "width_error_fraction": float(width_error_fraction),
         }
 
-    def observe(self, frame):
+    def observe(self, frame, include_debug=True):
+        """Measure the lane and optionally render diagnostic images.
+
+        Physical headless control consumes only the numeric observation.  The
+        previous implementation still ran Canny, copied two full frames and
+        drew every fitted point on every control iteration.  On the two-core
+        Jetson Nano 5 W profile that work competed with YOLO and made otherwise
+        valid obstacle results expire.  Diagnostics retain the original
+        visuals by using the default ``include_debug=True``.
+        """
         warped, source, destination, matrix = self.warp(frame)
         height, width = warped.shape[:2]
 
@@ -1692,7 +1701,7 @@ class IPMLaneDetector(object):
             black_mask, cv2.MORPH_OPEN, self._opening_kernel
         )
         black_mask = cv2.bitwise_and(black_mask, analysis_mask)
-        edges = cv2.Canny(black_mask, 50, 150)
+        edges = cv2.Canny(black_mask, 50, 150) if include_debug else None
 
         if self.config["detector_mode"] == SINGLE_LINE_DETECTOR_MODE:
             detection = detect_single_line(
@@ -1724,97 +1733,114 @@ class IPMLaneDetector(object):
         width_quality = detection["width_quality"]
         confidence = detection["confidence"]
 
-        original_overlay = frame.copy()
-        cv2.polylines(
-            original_overlay,
-            [np.int32(source)],
-            True,
-            (0, 200, 255),
-            2,
-        )
+        original_overlay = None
+        warped_overlay = None
+        if include_debug:
+            original_overlay = frame.copy()
+            cv2.polylines(
+                original_overlay,
+                [np.int32(source)],
+                True,
+                (0, 200, 255),
+                2,
+            )
 
-        warped_overlay = warped.copy()
-        if self.config["detector_mode"] == SINGLE_LINE_DETECTOR_MODE:
-            for y_value, x_value in detection.get("centre_points", []):
-                cv2.circle(
-                    warped_overlay,
-                    (int(round(x_value)), int(y_value)),
-                    2,
-                    (0, 180, 0),
-                    -1,
-                )
-            fits_and_colours = (
-                (detection.get("centre_fit"), (0, 255, 0)),
-            )
-        else:
-            for y_value, pair in detection["traced"]:
-                cv2.circle(
-                    warped_overlay,
-                    (int(round(pair["left"]["x"])), int(y_value)),
-                    2,
-                    (0, 180, 0),
-                    -1,
-                )
-                cv2.circle(
-                    warped_overlay,
-                    (int(round(pair["right"]["x"])), int(y_value)),
-                    2,
-                    (0, 180, 0),
-                    -1,
-                )
-            fits_and_colours = (
-                (detection["left_fit"], (0, 255, 0)),
-                (detection["right_fit"], (0, 255, 0)),
-            )
-        for fit, colour in fits_and_colours:
-            if fit is not None:
-                if self.config["detector_mode"] == SINGLE_LINE_DETECTOR_MODE:
-                    fit_top = self.config["single_line_scan_top_fraction"]
-                    fit_bottom = self.config[
-                        "single_line_scan_bottom_fraction"
-                    ]
-                else:
-                    fit_top = self.config["scan_top_fraction"]
-                    fit_bottom = self.config["scan_bottom_fraction"]
-                y_values = range(
-                    int(height * float(fit_top)),
-                    int(height * float(fit_bottom)),
-                    3,
-                )
-                curve = []
-                for y_value in y_values:
-                    x_value = float(
-                        np.polyval(fit["coefficients"], y_value)
-                    )
-                    if math.isfinite(x_value) and 0 <= x_value < width:
-                        curve.append((int(round(x_value)), int(y_value)))
-                if len(curve) >= 2:
-                    cv2.polylines(
+            warped_overlay = warped.copy()
+            if self.config["detector_mode"] == SINGLE_LINE_DETECTOR_MODE:
+                for y_value, x_value in detection.get("centre_points", []):
+                    cv2.circle(
                         warped_overlay,
-                        [np.int32(curve)],
-                        False,
-                        colour,
+                        (int(round(x_value)), int(y_value)),
                         2,
+                        (0, 180, 0),
+                        -1,
                     )
-        cv2.line(
-            warped_overlay,
-            (int(centre_x), height - 1),
-            (int(centre_x), 0),
-            (255, 0, 0),
-            1,
-        )
-        if left_x is not None:
-            cv2.circle(warped_overlay, (int(left_x), target_y), 6, (0, 255, 0), -1)
-        if right_x is not None:
-            cv2.circle(warped_overlay, (int(right_x), target_y), 6, (0, 255, 0), -1)
-        if lane_centre is not None:
-            cv2.circle(
+                fits_and_colours = (
+                    (detection.get("centre_fit"), (0, 255, 0)),
+                )
+            else:
+                for y_value, pair in detection["traced"]:
+                    cv2.circle(
+                        warped_overlay,
+                        (int(round(pair["left"]["x"])), int(y_value)),
+                        2,
+                        (0, 180, 0),
+                        -1,
+                    )
+                    cv2.circle(
+                        warped_overlay,
+                        (int(round(pair["right"]["x"])), int(y_value)),
+                        2,
+                        (0, 180, 0),
+                        -1,
+                    )
+                fits_and_colours = (
+                    (detection["left_fit"], (0, 255, 0)),
+                    (detection["right_fit"], (0, 255, 0)),
+                )
+            for fit, colour in fits_and_colours:
+                if fit is not None:
+                    if self.config["detector_mode"] == SINGLE_LINE_DETECTOR_MODE:
+                        fit_top = self.config[
+                            "single_line_scan_top_fraction"
+                        ]
+                        fit_bottom = self.config[
+                            "single_line_scan_bottom_fraction"
+                        ]
+                    else:
+                        fit_top = self.config["scan_top_fraction"]
+                        fit_bottom = self.config["scan_bottom_fraction"]
+                    y_values = range(
+                        int(height * float(fit_top)),
+                        int(height * float(fit_bottom)),
+                        3,
+                    )
+                    curve = []
+                    for y_value in y_values:
+                        x_value = float(
+                            np.polyval(fit["coefficients"], y_value)
+                        )
+                        if math.isfinite(x_value) and 0 <= x_value < width:
+                            curve.append((int(round(x_value)), int(y_value)))
+                    if len(curve) >= 2:
+                        cv2.polylines(
+                            warped_overlay,
+                            [np.int32(curve)],
+                            False,
+                            colour,
+                            2,
+                        )
+            cv2.line(
                 warped_overlay,
-                (int(lane_centre), target_y),
-                7,
-                (0, 0, 255),
-                -1,
+                (int(centre_x), height - 1),
+                (int(centre_x), 0),
+                (255, 0, 0),
+                1,
             )
+            if left_x is not None:
+                cv2.circle(
+                    warped_overlay,
+                    (int(left_x), target_y),
+                    6,
+                    (0, 255, 0),
+                    -1,
+                )
+            if right_x is not None:
+                cv2.circle(
+                    warped_overlay,
+                    (int(right_x), target_y),
+                    6,
+                    (0, 255, 0),
+                    -1,
+                )
+            if lane_centre is not None:
+                cv2.circle(
+                    warped_overlay,
+                    (int(lane_centre), target_y),
+                    7,
+                    (0, 0, 255),
+                    -1,
+                )
 
         return {
             "status": status,
