@@ -67,7 +67,7 @@ def write_test_config(directory):
         # New paired-row detector options. Older implementations safely
         # ignore these extra JSON keys, so the test also diagnoses whether
         # the intended detector has actually landed.
-        "detector_mode": "PAIRED_ROW_POLYNOMIAL_V1",
+        "detector_mode": "PAIRED_ROW_POLYNOMIAL_V2",
         "scan_top_fraction": 0.28,
         "scan_bottom_fraction": 0.94,
         "scan_row_step_px": 6,
@@ -88,6 +88,14 @@ def write_test_config(directory):
         "maximum_lane_width_variation_fraction": 0.25,
         "lane_width_evaluation_window_fraction": 0.30,
         "valid_roi_erode_px": 5,
+        "close_curve_minimum_pairs": 8,
+        "close_curve_minimum_paired_row_fraction": 0.20,
+        "close_curve_minimum_vertical_coverage_fraction": 0.30,
+        "close_curve_maximum_fit_residual_px": 3.0,
+        "close_curve_maximum_lane_width_variation_fraction": 0.15,
+        "close_curve_minimum_pair_quality": 0.75,
+        "close_curve_maximum_width_error_fraction": 0.35,
+        "close_curve_maximum_raw_row_runs": 8,
     }
     with open(path, "w") as config_file:
         json.dump(config, config_file, indent=2, sort_keys=True)
@@ -203,6 +211,63 @@ def concentric_arc_frame():
     return frame
 
 
+def close_curve_short_support_frame():
+    """Model two continuous close-bend components near look-ahead."""
+    frame = clean_floor()
+    y_values = np.arange(158, 237)
+    relative = (y_values.astype(np.float64) - 222.0) / 64.0
+    left_x = 104.0 + 6.0 * relative + 2.5 * relative * relative
+    right_x = 344.0 + 17.0 * relative + 5.0 * relative * relative
+    for x_values in (left_x, right_x):
+        cv2.polylines(
+            frame,
+            [np.int32(np.column_stack([x_values, y_values]))],
+            False,
+            TAPE_COLOUR,
+            TAPE_THICKNESS,
+            cv2.LINE_8,
+        )
+    return frame
+
+
+def close_curve_wide_row_frame():
+    """A tape-like bend whose right rail is too wide for row-run parsing."""
+    frame = clean_floor()
+    left_points = np.int32([
+        [108, 153],
+        [103, 175],
+        [100, 198],
+        [101, 220],
+        [106, 241],
+    ])
+    right_points = np.int32([
+        [510, 158],
+        [470, 165],
+        [430, 178],
+        [395, 195],
+        [365, 215],
+        [345, 241],
+    ])
+    for points in (left_points, right_points):
+        cv2.polylines(
+            frame,
+            [points],
+            False,
+            TAPE_COLOUR,
+            18,
+            cv2.LINE_8,
+        )
+    return frame
+
+
+def broad_blob_false_pair_frame():
+    """A real rail plus a broad dark object must never form a lane."""
+    frame = clean_floor()
+    cv2.rectangle(frame, (90, 170), (105, 270), TAPE_COLOUR, -1)
+    cv2.rectangle(frame, (385, 170), (565, 270), TAPE_COLOUR, -1)
+    return frame
+
+
 def textured_noise_frame():
     random_state = np.random.RandomState(2062)
     gray = random_state.normal(220.0, 8.0, (HEIGHT, WIDTH))
@@ -233,15 +298,23 @@ def outside_roi_false_pair_frame():
 
 
 def excessive_runs_frame():
-    """Create more per-row candidates than the bounded detector accepts."""
+    """Create more per-row candidates than the bounded detector accepts.
+
+    Keep the synthetic stripes far enough apart that Gaussian filtering and
+    the 5 px close kernel cannot join neighbouring stripes on OpenCV 3.2.
+    The former 3 px stripes at 9 px centres were distinct on newer OpenCV,
+    but could merge into one broad rejected blob on the Jetson Nano image.
+    Thirty-one 5 px stripes at 17 px centres remain separate while still
+    exceeding the configured 24-run safety cap on every scanned row.
+    """
     frame = clean_floor()
-    for x_value in range(52, 589, 9):
+    for x_value in range(65, 578, 17):
         cv2.line(
             frame,
             (x_value, 0),
             (x_value, HEIGHT - 1),
             TAPE_COLOUR,
-            3,
+            5,
             cv2.LINE_8,
         )
     return frame
@@ -419,6 +492,81 @@ def test_concentric_oval_arc(config_path):
         "concentric right bend must request a positive correction, got {:.4f}".format(
             observation["lane_offset"]
         ),
+    )
+    return observation
+
+
+def test_guarded_close_curve(config_path):
+    observation = observe_new(config_path, close_curve_short_support_frame())
+    require(
+        observation["status"] == "FULL",
+        "guarded close curve must be FULL, got {}".format(
+            observation["status"]
+        ),
+    )
+    require(
+        observation["support_mode"] == "COMPONENT_CURVE",
+        "short-support curve must use COMPONENT_CURVE, got {}".format(
+            observation["support_mode"]
+        ),
+    )
+    require(
+        observation["confidence"] >= 0.55,
+        "guarded close-curve confidence must satisfy the safety gate, got "
+        "{:.3f}".format(observation["confidence"]),
+    )
+    require(
+        observation["paired_row_fraction"] < 0.40
+        or observation["vertical_coverage_fraction"] < 0.45,
+        "close-curve fixture accidentally passed the standard support gate",
+    )
+    return observation
+
+
+def test_wide_row_component_curve(config_path):
+    observation = observe_new(config_path, close_curve_wide_row_frame())
+    maximum_active_run = 0
+    for row in observation["mask"] > 0:
+        active_x = np.where(row)[0]
+        if active_x.size == 0:
+            continue
+        split_positions = np.where(np.diff(active_x) > 1)[0] + 1
+        for run in np.split(active_x, split_positions):
+            maximum_active_run = max(maximum_active_run, int(run.size))
+    configured_row_limit = WIDTH * float(
+        IPMLaneDetector(config_path).config[
+            "maximum_tape_run_width_fraction"
+        ]
+    )
+    require(
+        maximum_active_run > configured_row_limit,
+        "wide-row fixture did not exceed the horizontal run limit",
+    )
+    require(
+        observation["status"] == "FULL",
+        "near-horizontal tape curve must be FULL, got {}".format(
+            observation["status"]
+        ),
+    )
+    require(
+        observation["support_mode"] == "COMPONENT_CURVE",
+        "wide-row curve must use COMPONENT_CURVE, got {}".format(
+            observation["support_mode"]
+        ),
+    )
+    require(
+        observation["confidence"] >= 0.55,
+        "wide-row curve confidence must satisfy the safety gate, got "
+        "{:.3f}".format(observation["confidence"]),
+    )
+    return observation
+
+
+def test_broad_blob_not_rail(config_path):
+    observation = observe_new(config_path, broad_blob_false_pair_frame())
+    require(
+        observation["status"] != "FULL",
+        "a broad filled dark object must not be accepted as a rail",
     )
     return observation
 
@@ -747,6 +895,19 @@ def test_config_validation_rejects_unsafe_values(directory, config_path):
             rejected = key in str(error)
         require(rejected, "unsafe config value {} was accepted".format(key))
 
+    missing_mode = dict(base)
+    del missing_mode["detector_mode"]
+    missing_mode_path = os.path.join(directory, "missing_detector_mode.json")
+    with open(missing_mode_path, "w") as config_file:
+        json.dump(missing_mode, config_file)
+        config_file.write("\n")
+    rejected = False
+    try:
+        IPMLaneDetector(missing_mode_path)
+    except ValueError as error:
+        rejected = "detector_mode" in str(error)
+    require(rejected, "a mode-less legacy config was silently accepted")
+
 
 def test_safety_stops_non_full(non_full_observations):
     config = load_controller_config()
@@ -830,6 +991,9 @@ def main():
             ("curve_same_left_full", test_curve_both_rails_same_half),
             ("curve_same_right_full", test_curve_both_rails_same_right_half),
             ("concentric_oval_full", test_concentric_oval_arc),
+            ("guarded_close_curve_full", test_guarded_close_curve),
+            ("wide_row_curve_full", test_wide_row_component_curve),
+            ("broad_blob_not_full", test_broad_blob_not_rail),
             ("crossbar_ignored", test_crossbar_ignored),
             ("invalid_width_not_full", test_invalid_width_not_full),
             ("single_rail_not_full", test_single_rail_after_full_not_full),
@@ -872,6 +1036,7 @@ def main():
                 "texture_noise_not_full",
                 "outside_roi_not_full",
                 "run_overflow_stop",
+                "broad_blob_not_full",
                 "fragmented_not_full",
                 "distant_support_stop",
                 "spurious_not_false_full",
@@ -885,7 +1050,7 @@ def main():
         test_config_validation_rejects_unsafe_values(
             temporary_directory, config_path
         )
-        print("PASS unsafe_config_rejected    3 cases")
+        print("PASS unsafe_config_rejected    4 cases")
         test_lookahead_outside_scan_rejected(config_path)
         print("PASS lookahead_scan_rejected   below and above")
         test_semantically_wrong_quad_order_rejected(config_path)

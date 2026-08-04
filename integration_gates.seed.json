@@ -26,19 +26,25 @@
       "passed": false,
       "classification": "UNVERIFIED",
       "integrity_status": "UNRECORDED",
-      "evidence": "Run calibrate_ipm.py on the physical track, then record-ipm-calibration."
+      "evidence": "Run calibrate_ipm.py with the independent four-corner ground target, then record-ipm-calibration."
     },
     "ipm_live_dry_run": {
       "passed": false,
       "classification": "UNVERIFIED",
       "integrity_status": "UNRECORDED",
-      "evidence": "Run ipm_live_dry_run.py after physical IPM calibration."
+      "evidence": "Remove or fully mask the inner circle, then run ipm_live_dry_run.py on the centred outer-circle single line after physical IPM calibration."
+    },
+    "outer_circle_positions": {
+      "passed": false,
+      "classification": "UNVERIFIED",
+      "integrity_status": "UNRECORDED",
+      "evidence": "After ipm_live_dry_run passes, run outer_circle_position_validation.py at STRAIGHT, CURVE_ENTRY, CURVE_APEX and CURVE_EXIT with the motor battery disconnected."
     },
     "integrated_control_dry_run": {
       "passed": false,
       "classification": "UNVERIFIED",
       "integrity_status": "UNRECORDED",
-      "evidence": "Run integrated_control_dry_run.py and exercise DRIVE and obstacle STOP."
+      "evidence": "Run integrated_control_dry_run.py only after the four outer-circle representative positions pass; exercise DRIVE, obstacle STOP and missing-line STOP."
     },
     "raised_motor_adapter": {
       "passed": false,

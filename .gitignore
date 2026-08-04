@@ -28,6 +28,9 @@ output/
 diagnostics/
 build_manifest_*.json
 *.csv
+*.log
+*.jsonl
+export_metadata/
 
 # Deployment backups and temporary files
 *.bak
@@ -36,6 +39,9 @@ build_manifest_*.json
 .*.tmp
 tmp/
 work/
+*.zip
+*.tar
+*.tar.gz
 
 # Editor / OS
 .vscode/

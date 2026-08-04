@@ -51,9 +51,10 @@
 
 For every displayed result, state both its evidence classification (for
 example PHYSICALLY VERIFIED, SOFTWARE VERIFIED ON PHYSICAL CSI, SIMULATED, or
-UNVERIFIED) and its currency (CURRENT or PRIOR). Do not present the archived
-approximately 4.8 FPS/245 ms values as current unless the current pinned build
-reproduces them.
+UNVERIFIED) and its currency (CURRENT or PRIOR). The retained 2026-07-26
+YOLOv5n artifact measured `8.283126567668365` complete-window FPS and
+`93.89088915256971 ms` mean inference. It is prior evidence for a changed
+source identity and must not be presented as a current motion gate.
 
 ## Questions lecturers are likely to ask
 

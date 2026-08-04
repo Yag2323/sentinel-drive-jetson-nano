@@ -13,7 +13,7 @@ import sys
 from source_integrity import git_source_state, source_tree_sha256
 
 
-BUILD_ID = "SENTINEL-INTEGRATION-2026.07.27-OVAL1"
+BUILD_ID = "SENTINEL-INTEGRATION-2026.08.01-SINGLE-LINE3"
 EXPECTED_YOLOV5_V6_COMMIT = "956be8e642b5c10af4a1533e09084ca32ff4f21f"
 EXPECTED_YOLOV5N_SHA256 = "649e089f59b78ac021025de035b2d9c45dc26e544ea252955d0ffcefc1099e2f"
 EXPECTED_YOLOV5S_SHA256 = "c3b140f32001a9eec4afa07120b3851eb1b6c2c7c7e7a4303af9eadfacbeb598"
@@ -31,11 +31,14 @@ CORE_FILES = (
     "yolov5_runtime.py",
     "yolo_csi_benchmark.py",
     "ipm_lane.py",
+    "single_line_lane.py",
     "calibrate_ipm.py",
-    "install_oval_lane_profile.py",
+    "install_single_line_profile.py",
     "test_ipm_lane_synthetic.py",
+    "test_single_line_synthetic.py",
     "ipm_alignment_diagnostic.py",
     "ipm_live_dry_run.py",
+    "outer_circle_position_validation.py",
     "ipm_config.json",
     "control_core.py",
     "controller_config.json",

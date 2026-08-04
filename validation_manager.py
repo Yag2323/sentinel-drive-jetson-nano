@@ -23,6 +23,7 @@ import subprocess
 import sys
 
 from source_integrity import git_source_state, source_tree_sha256
+from single_line_lane import SINGLE_LINE_DETECTOR_MODE
 
 
 PROJECT_DIRECTORY = os.path.dirname(os.path.abspath(__file__))
@@ -31,6 +32,7 @@ IPM_CONFIG_PATH = os.path.join(PROJECT_DIRECTORY, "ipm_config.json")
 EVIDENCE_DIRECTORY = os.path.join(PROJECT_DIRECTORY, "evidence")
 EXPECTED_YOLOV5_V6_COMMIT = "956be8e642b5c10af4a1533e09084ca32ff4f21f"
 EXPECTED_YOLOV5N_SHA256 = "649e089f59b78ac021025de035b2d9c45dc26e544ea252955d0ffcefc1099e2f"
+EXPECTED_TARGET_LINE_ROLE = "OUTER_CIRCLE_CENTERLINE"
 
 REQUIRED_MOTION_GATES = (
     "camera_orientation",
@@ -38,6 +40,7 @@ REQUIRED_MOTION_GATES = (
     "yolo_current_regression",
     "ipm_physical_calibration",
     "ipm_live_dry_run",
+    "outer_circle_positions",
     "integrated_control_dry_run",
     "raised_motor_adapter",
     "short_floor_steering",
@@ -49,6 +52,7 @@ EVIDENCE_RULES = {
     "yolo_current_regression": "YOLOV5N_REAL_CSI_BENCHMARK",
     "ipm_physical_calibration": "PHYSICAL_IPM_CALIBRATION",
     "ipm_live_dry_run": "PHYSICAL_CSI_IPM_DRY_RUN",
+    "outer_circle_positions": "OUTER_CIRCLE_REPRESENTATIVE_POSITIONS",
     "integrated_control_dry_run": "INTEGRATED_PERCEPTION_CONTROL_DRY_RUN",
     "raised_motor_adapter": "RAISED_STEERING_AND_COMMAND_LEASE_VALIDATION",
     "short_floor_steering": "SHORT_FLOOR_STEERING_VALIDATION",
@@ -63,12 +67,18 @@ GATE_PREREQUISITES = {
         "camera_orientation",
         "ipm_physical_calibration",
     ),
+    "outer_circle_positions": (
+        "camera_orientation",
+        "ipm_physical_calibration",
+        "ipm_live_dry_run",
+    ),
     "integrated_control_dry_run": (
         "camera_orientation",
         "motor_mapping_software",
         "yolo_current_regression",
         "ipm_physical_calibration",
         "ipm_live_dry_run",
+        "outer_circle_positions",
     ),
     "raised_motor_adapter": (
         "camera_orientation",
@@ -76,6 +86,7 @@ GATE_PREREQUISITES = {
         "yolo_current_regression",
         "ipm_physical_calibration",
         "ipm_live_dry_run",
+        "outer_circle_positions",
         "integrated_control_dry_run",
     ),
     "short_floor_steering": (
@@ -84,6 +95,7 @@ GATE_PREREQUISITES = {
         "yolo_current_regression",
         "ipm_physical_calibration",
         "ipm_live_dry_run",
+        "outer_circle_positions",
         "integrated_control_dry_run",
         "raised_motor_adapter",
     ),
@@ -95,6 +107,7 @@ GATE_CLASSIFICATIONS = {
     "yolo_current_regression": "SOFTWARE_VERIFIED_ON_PHYSICAL_CSI",
     "ipm_physical_calibration": "PHYSICALLY_VERIFIED",
     "ipm_live_dry_run": "SOFTWARE_VERIFIED_ON_PHYSICAL_CSI",
+    "outer_circle_positions": "PHYSICALLY_VERIFIED",
     "integrated_control_dry_run": "SOFTWARE_VERIFIED_ON_PHYSICAL_CSI",
     "raised_motor_adapter": "PHYSICALLY_VERIFIED",
     "short_floor_steering": "PHYSICALLY_VERIFIED",
@@ -131,6 +144,7 @@ GATE_ARTIFACTS = {
         "validation_manager.py",
         "gst_camera_bridge.py",
         "ipm_lane.py",
+        "single_line_lane.py",
         "calibrate_ipm.py",
         "ipm_config.json",
     ),
@@ -138,7 +152,16 @@ GATE_ARTIFACTS = {
         "validation_manager.py",
         "gst_camera_bridge.py",
         "ipm_lane.py",
+        "single_line_lane.py",
         "ipm_live_dry_run.py",
+        "ipm_config.json",
+    ),
+    "outer_circle_positions": (
+        "validation_manager.py",
+        "gst_camera_bridge.py",
+        "ipm_lane.py",
+        "single_line_lane.py",
+        "outer_circle_position_validation.py",
         "ipm_config.json",
     ),
     "integrated_control_dry_run": (
@@ -146,6 +169,7 @@ GATE_ARTIFACTS = {
         "source_integrity.py",
         "gst_camera_bridge.py",
         "ipm_lane.py",
+        "single_line_lane.py",
         "ipm_config.json",
         "yolov5_runtime.py",
         "yolov5_v6",
@@ -182,6 +206,8 @@ AUTHORIZATION_ARTIFACTS = (
     "validation_manager.py",
     "source_integrity.py",
     "track_run.py",
+    "guarded_live_circle_run.py",
+    "guarded_straight_line_run.py",
 )
 
 
@@ -601,6 +627,16 @@ def validate_evidence_payload(gate_name, evidence):
             raise ValueError("IPM calibration state is not physical")
         if not os.path.isfile(str(evidence.get("evidence_image", ""))):
             raise ValueError("IPM calibration evidence image is missing")
+        if evidence.get("detector_mode") != SINGLE_LINE_DETECTOR_MODE:
+            raise ValueError("IPM calibration used the wrong detector mode")
+        if evidence.get("target_line_role") != EXPECTED_TARGET_LINE_ROLE:
+            raise ValueError("IPM calibration used the wrong target-line role")
+        if evidence.get("calibration_target") != (
+            "FOUR_CORNER_GROUND_PLANE_TARGET"
+        ):
+            raise ValueError(
+                "IPM calibration must use the independent ground-plane target"
+            )
     elif gate_name == "ipm_live_dry_run":
         if evidence.get("motor_commands") is not False:
             raise ValueError("IPM dry run must declare motor_commands=false")
@@ -608,6 +644,19 @@ def validate_evidence_payload(gate_name, evidence):
             raise ValueError("IPM dry run must use physical calibration")
         if evidence.get("default_ipm_config_used") is not True:
             raise ValueError("IPM dry run must use the gate-bound default config")
+        if evidence.get("detector_mode") != SINGLE_LINE_DETECTOR_MODE:
+            raise ValueError("IPM dry run used the wrong detector mode")
+        if evidence.get("target_line_role") != EXPECTED_TARGET_LINE_ROLE:
+            raise ValueError("IPM dry run used the wrong target-line role")
+        if evidence.get("outer_tape_only_operator_confirmed") is not True:
+            raise ValueError(
+                "IPM dry run did not confirm removal/masking of the inner "
+                "circle"
+            )
+        if evidence.get("centred_reference_metric") != "near_field_offset":
+            raise ValueError(
+                "IPM centred-reference gate must use near_field_offset"
+            )
         if evidence.get("measurement_window_completed") is not True:
             raise ValueError("IPM dry run did not complete its full window")
         if evidence_integer(evidence, "frames") < 50:
@@ -632,6 +681,155 @@ def validate_evidence_payload(gate_name, evidence):
             raise ValueError("IPM dry run mean lane confidence is below 0.55")
         if evidence_number(evidence, "average_loop_fps") < 5.0:
             raise ValueError("IPM dry run average loop rate is below 5 FPS")
+    elif gate_name == "outer_circle_positions":
+        if evidence.get("physical_motor_commands") is not False:
+            raise ValueError(
+                "outer-circle position validation must declare motor commands false"
+            )
+        if evidence.get("motor_commands") is not False:
+            raise ValueError(
+                "outer-circle position validation must not command motors"
+            )
+        if evidence.get("motor_modules_imported") is not False:
+            raise ValueError(
+                "outer-circle position validation imported a motor module"
+            )
+        if evidence.get("loaded_motor_modules") != []:
+            raise ValueError(
+                "outer-circle evidence lists loaded motor modules"
+            )
+        if evidence.get(
+            "operator_confirmed_motor_battery_disconnected"
+        ) is not True:
+            raise ValueError(
+                "outer-circle validation requires disconnected motor battery"
+            )
+        if evidence.get("outer_tape_only_operator_confirmed") is not True:
+            raise ValueError(
+                "outer-circle validation requires the inner circle removed "
+                "or fully masked"
+            )
+        if evidence.get("default_ipm_config_used") is not True:
+            raise ValueError(
+                "outer-circle validation must use the gate-bound default config"
+            )
+        if evidence.get("calibration_state") != "PHYSICALLY_CALIBRATED":
+            raise ValueError(
+                "outer-circle validation must use physical calibration"
+            )
+        if evidence.get("detector_mode") != SINGLE_LINE_DETECTOR_MODE:
+            raise ValueError(
+                "outer-circle validation used the wrong detector mode"
+            )
+        if evidence.get("target_line_role") != EXPECTED_TARGET_LINE_ROLE:
+            raise ValueError(
+                "outer-circle validation used the wrong target-line role"
+            )
+        if evidence.get("all_positions_passed") is not True:
+            raise ValueError(
+                "not every representative outer-circle position passed"
+            )
+        expected_positions = [
+            "STRAIGHT",
+            "CURVE_ENTRY",
+            "CURVE_APEX",
+            "CURVE_EXIT",
+        ]
+        if evidence.get("positions_expected") != expected_positions:
+            raise ValueError(
+                "outer-circle evidence has the wrong position sequence"
+            )
+        near_limit = evidence_number(
+            evidence, "maximum_absolute_near_field_offset"
+        )
+        if not 0.0 < near_limit <= 0.25:
+            raise ValueError(
+                "outer-circle near-field limit must be no greater than 0.25"
+            )
+        if evidence_number(evidence, "minimum_confidence") < 0.55:
+            raise ValueError(
+                "outer-circle confidence requirement is below 0.55"
+            )
+        if evidence_number(evidence, "maximum_camera_age_s") > 0.25:
+            raise ValueError(
+                "outer-circle camera-age limit exceeds 0.25 seconds"
+            )
+        if evidence_integer(evidence, "minimum_samples_per_position") < 10:
+            raise ValueError(
+                "outer-circle validation requires at least 10 samples per position"
+            )
+        positions = evidence.get("positions")
+        if not isinstance(positions, list) or [
+            item.get("position") if isinstance(item, dict) else None
+            for item in positions
+        ] != expected_positions:
+            raise ValueError(
+                "outer-circle evidence does not contain all four positions"
+            )
+        for item in positions:
+            if item.get("passed") is not True:
+                raise ValueError(
+                    "outer-circle position {} did not pass".format(
+                        item.get("position")
+                    )
+                )
+            if item.get("measurement_window_completed") is not True:
+                raise ValueError(
+                    "outer-circle position window did not complete"
+                )
+            samples = evidence_integer(item, "samples")
+            if samples < 10:
+                raise ValueError(
+                    "outer-circle position has fewer than 10 samples"
+                )
+            if evidence_integer(item, "trustworthy_samples") != samples:
+                raise ValueError(
+                    "outer-circle position contains untrustworthy samples"
+                )
+            if evidence_integer(item, "full_samples") != samples:
+                raise ValueError(
+                    "outer-circle position contains a non-FULL sample"
+                )
+            if evidence_integer(item, "failed_samples") != 0:
+                raise ValueError(
+                    "outer-circle position contains failed samples"
+                )
+            if evidence_integer(item, "stale_samples") != 0:
+                raise ValueError(
+                    "outer-circle position contains stale samples"
+                )
+            confidence = evidence_number(item, "minimum_confidence")
+            if not 0.55 <= confidence <= 1.0:
+                raise ValueError(
+                    "outer-circle position confidence fell below 0.55"
+                )
+            maximum_offset = evidence_number(
+                item, "maximum_absolute_near_field_offset"
+            )
+            if not 0.0 <= maximum_offset <= near_limit:
+                raise ValueError(
+                    "outer-circle position near-field offset exceeded its limit"
+                )
+            maximum_age = evidence_number(item, "maximum_camera_age_s")
+            if not 0.0 <= maximum_age <= 0.25:
+                raise ValueError(
+                    "outer-circle position camera observation became stale"
+                )
+            if not os.path.isfile(str(item.get("evidence_image", ""))):
+                raise ValueError(
+                    "outer-circle position evidence image is missing"
+                )
+        if not os.path.isfile(str(evidence.get("csv", ""))):
+            raise ValueError("outer-circle position CSV is missing")
+        evidence_images = evidence.get("evidence_images")
+        if not isinstance(evidence_images, list) or len(evidence_images) != 4:
+            raise ValueError(
+                "outer-circle validation requires four evidence images"
+            )
+        if any(not os.path.isfile(str(path)) for path in evidence_images):
+            raise ValueError(
+                "one or more outer-circle evidence images are missing"
+            )
     elif gate_name == "integrated_control_dry_run":
         if evidence.get("physical_motor_commands") is not False:
             raise ValueError("integrated dry run must declare motor commands false")
@@ -646,6 +844,12 @@ def validate_evidence_payload(gate_name, evidence):
             raise ValueError("integrated dry run must use physical IPM calibration")
         if evidence.get("default_ipm_config_used") is not True:
             raise ValueError("integrated dry run must use the gate-bound IPM config")
+        if evidence.get("detector_mode") != SINGLE_LINE_DETECTOR_MODE:
+            raise ValueError("integrated dry run used the wrong detector mode")
+        if evidence.get("target_line_role") != EXPECTED_TARGET_LINE_ROLE:
+            raise ValueError(
+                "integrated dry run used the wrong target-line role"
+            )
         if evidence.get("measurement_window_completed") is not True:
             raise ValueError("integrated dry run did not complete its full window")
         if evidence_integer(evidence, "frames") < 50:

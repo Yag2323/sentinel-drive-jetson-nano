@@ -20,6 +20,11 @@ from ipm_lane import DEFAULT_CONFIG_PATH, IPMLaneDetector
 from validation_manager import capture_artifact_snapshot
 
 
+CAMERA_STALE_LIMIT_SECONDS = 0.25
+WARMUP_TIMEOUT_SECONDS = 10.0
+WARMUP_REQUIRED_FRESH_STREAK = 3
+
+
 def utc_now():
     return datetime.datetime.utcnow().isoformat() + "Z"
 
@@ -33,8 +38,9 @@ def main():
         "--expected-centered",
         action="store_true",
         help=(
-            "Confirm the stationary robot centreline is manually aligned to "
-            "the lane centre; required for a passing calibration result."
+            "Confirm the stationary robot is manually positioned with the "
+            "OUTER black tape directly under the camera/vehicle centre; "
+            "required for a passing result."
         ),
     )
     parser.add_argument(
@@ -49,6 +55,23 @@ def main():
         return 1
 
     detector = IPMLaneDetector(arguments.config)
+    single_outer_target = (
+        detector.config.get("detector_mode") == "SINGLE_LINE_POLYNOMIAL_V1"
+        and detector.config.get("target_line_role")
+        == "OUTER_CIRCLE_CENTERLINE"
+    )
+    outer_tape_only_confirmed = False
+    if single_outer_target:
+        print("SINGLE-LINE PHYSICAL TARGET CHECK - MOTORS ARE NOT ACCESSED")
+        print("Remove or completely mask the inner circle before this test.")
+        print("Place the OUTER tape directly under the camera/vehicle centre.")
+        response = input(
+            "Type OUTER-TAPE-ONLY to confirm the inner circle is absent: "
+        ).strip()
+        outer_tape_only_confirmed = response == "OUTER-TAPE-ONLY"
+        if not outer_tape_only_confirmed:
+            print("REFUSED: outer-tape-only condition was not confirmed.")
+            return 1
     default_config_used = (
         os.path.realpath(os.path.abspath(arguments.config))
         == os.path.realpath(os.path.abspath(DEFAULT_CONFIG_PATH))
@@ -78,14 +101,20 @@ def main():
     )
 
     rows = []
-    offsets = []
+    near_field_offsets = []
+    steering_offsets = []
     confidences = []
     fps_values = []
     full_frames = 0
     usable_frames = 0
     latest_composite = None
     error_text = None
-    start = time.monotonic()
+    start = None
+    warmup_attempts = 0
+    warmup_observations = 0
+    warmup_fresh_streak = 0
+    warmup_maximum_age = 0.0
+    warmup_stabilized = False
 
     csv_file = open(csv_path, "w", newline="")
     fields = (
@@ -98,6 +127,11 @@ def main():
         "camera_fresh",
         "status",
         "lane_offset",
+        "near_field_offset",
+        "lookahead_offset",
+        "heading_error_rad",
+        "curvature_per_px",
+        "candidate_count",
         "confidence",
         "lane_width_px",
         "line_count",
@@ -112,6 +146,63 @@ def main():
 
     frame_number = 0
     try:
+        print(
+            "Stabilising camera/detector for up to {:.1f} seconds; "
+            "the {:.3f} s freshness limit is unchanged.".format(
+                WARMUP_TIMEOUT_SECONDS,
+                CAMERA_STALE_LIMIT_SECONDS,
+            )
+        )
+        warmup_deadline = time.monotonic() + WARMUP_TIMEOUT_SECONDS
+        while (
+            time.monotonic() < warmup_deadline
+            and warmup_fresh_streak < WARMUP_REQUIRED_FRESH_STREAK
+        ):
+            success, frame, camera_metadata = camera.read_with_metadata(
+                timeout_seconds=2.0
+            )
+            warmup_attempts += 1
+            if (
+                not success
+                or camera_metadata is None
+                or not camera_metadata["timestamp_valid"]
+                or not camera_metadata["source_age_trustworthy"]
+                or not camera_metadata["fresh"]
+            ):
+                warmup_fresh_streak = 0
+                continue
+            camera_age = (
+                time.monotonic() - camera_metadata["capture_monotonic"]
+            )
+            if camera_age > CAMERA_STALE_LIMIT_SECONDS:
+                warmup_fresh_streak = 0
+                warmup_maximum_age = max(warmup_maximum_age, camera_age)
+                continue
+            detector.observe(frame)
+            warmup_observations += 1
+            camera_age = (
+                time.monotonic() - camera_metadata["capture_monotonic"]
+            )
+            warmup_maximum_age = max(warmup_maximum_age, camera_age)
+            if camera_age <= CAMERA_STALE_LIMIT_SECONDS:
+                warmup_fresh_streak += 1
+            else:
+                warmup_fresh_streak = 0
+        warmup_stabilized = (
+            warmup_fresh_streak >= WARMUP_REQUIRED_FRESH_STREAK
+        )
+        if not warmup_stabilized:
+            raise RuntimeError(
+                "Camera/detector did not stabilise below the unchanged "
+                "{:.3f} s freshness limit.".format(
+                    CAMERA_STALE_LIMIT_SECONDS
+                )
+            )
+        print(
+            "Warm-up complete after {} attempts; starting the evidence "
+            "window now.".format(warmup_attempts)
+        )
+        start = time.monotonic()
         while time.monotonic() - start < arguments.seconds:
             loop_start = time.monotonic()
             success, frame, camera_metadata = camera.read_with_metadata(
@@ -127,7 +218,7 @@ def main():
             ):
                 raise RuntimeError("Camera frame timestamp is invalid or repeated.")
             camera_age = time.monotonic() - camera_metadata["capture_monotonic"]
-            if camera_age > 0.25:
+            if camera_age > CAMERA_STALE_LIMIT_SECONDS:
                 raise RuntimeError(
                     "Camera frame is stale: {:.3f} seconds.".format(camera_age)
                 )
@@ -136,7 +227,7 @@ def main():
             observation = detector.observe(frame)
             processing_ms = (time.monotonic() - process_start) * 1000.0
             camera_age = time.monotonic() - camera_metadata["capture_monotonic"]
-            if camera_age > 0.25:
+            if camera_age > CAMERA_STALE_LIMIT_SECONDS:
                 raise RuntimeError(
                     "Camera observation became stale: {:.3f} seconds."
                     .format(camera_age)
@@ -148,7 +239,10 @@ def main():
                 full_frames += 1
             if status == "FULL" or status.startswith("PARTIAL"):
                 usable_frames += 1
-                offsets.append(abs(observation["lane_offset"]))
+                near_field_offsets.append(
+                    abs(float(observation["near_field_offset"]))
+                )
+                steering_offsets.append(abs(float(observation["lane_offset"])))
 
             loop_time = time.monotonic() - loop_start
             loop_fps = 1.0 / loop_time if loop_time > 0 else 0.0
@@ -163,6 +257,21 @@ def main():
                 "camera_fresh": 1,
                 "status": status,
                 "lane_offset": round(observation["lane_offset"], 6),
+                "near_field_offset": round(
+                    observation["near_field_offset"], 6
+                ),
+                "lookahead_offset": round(
+                    observation["lookahead_offset"], 6
+                ),
+                "heading_error_rad": (
+                    "" if observation["heading_error_rad"] is None
+                    else round(observation["heading_error_rad"], 7)
+                ),
+                "curvature_per_px": (
+                    "" if observation["curvature_per_px"] is None
+                    else round(observation["curvature_per_px"], 9)
+                ),
+                "candidate_count": observation["candidate_count"],
                 "confidence": round(observation["confidence"], 4),
                 "lane_width_px": "" if observation["lane_width_px"] is None else round(observation["lane_width_px"], 3),
                 "line_count": observation["line_count"],
@@ -219,9 +328,20 @@ def main():
     processed = max(1, frame_number)
     full_rate = 100.0 * full_frames / processed
     usable_rate = 100.0 * usable_frames / processed
-    average_fps = statistics.mean(fps_values) if fps_values else 0.0
+    measurement_elapsed = (
+        measurement_end - start if start is not None else 0.0
+    )
+    average_fps = (
+        float(frame_number) / measurement_elapsed
+        if measurement_elapsed > 0.0
+        else 0.0
+    )
+    mean_instantaneous_fps = (
+        statistics.mean(fps_values) if fps_values else 0.0
+    )
     measurement_window_completed = bool(
-        measurement_end - start >= float(arguments.seconds)
+        start is not None
+        and measurement_elapsed >= float(arguments.seconds)
     )
     passed = (
         error_text is None
@@ -234,8 +354,15 @@ def main():
         and average_fps >= 5.0
         and image_written
         and artifact_snapshot_stable
+        and warmup_stabilized
+        and (not single_outer_target or outer_tape_only_confirmed)
     )
-    mean_offset = statistics.mean(offsets) if offsets else None
+    mean_offset = (
+        statistics.mean(near_field_offsets) if near_field_offsets else None
+    )
+    mean_steering_offset = (
+        statistics.mean(steering_offsets) if steering_offsets else None
+    )
     mean_confidence = statistics.mean(confidences) if confidences else 0.0
     passed = (
         passed
@@ -251,16 +378,32 @@ def main():
         "error": error_text,
         "motor_commands": False,
         "calibration_state": detector.config.get("calibration_state"),
+        "detector_mode": detector.config.get("detector_mode"),
+        "target_line_role": detector.config.get("target_line_role"),
+        "outer_tape_only_operator_confirmed": bool(
+            outer_tape_only_confirmed
+        ),
         "default_ipm_config_used": default_config_used,
         "frames": frame_number,
         "requested_measurement_window_s": float(arguments.seconds),
+        "measurement_elapsed_s": measurement_elapsed,
         "measurement_window_completed": measurement_window_completed,
+        "warmup_timeout_s": WARMUP_TIMEOUT_SECONDS,
+        "warmup_required_fresh_streak": WARMUP_REQUIRED_FRESH_STREAK,
+        "warmup_attempts": warmup_attempts,
+        "warmup_detector_observations": warmup_observations,
+        "warmup_final_fresh_streak": warmup_fresh_streak,
+        "warmup_maximum_camera_age_s": warmup_maximum_age,
+        "warmup_stabilized": warmup_stabilized,
         "full_lane_rate_pct": full_rate,
         "usable_lane_rate_pct": usable_rate,
         "expected_centered_reference": bool(arguments.expected_centered),
         "mean_absolute_offset": mean_offset,
+        "centred_reference_metric": "near_field_offset",
+        "mean_absolute_steering_offset": mean_steering_offset,
         "mean_lane_confidence": mean_confidence,
         "average_loop_fps": average_fps,
+        "mean_instantaneous_loop_fps": mean_instantaneous_fps,
         "artifact_snapshot_stable": artifact_snapshot_stable,
         "artifact_sha256_at_test": artifact_snapshot_end,
         "pass_requirements": {
@@ -269,9 +412,15 @@ def main():
             "minimum_full_lane_rate_pct": 90.0,
             "minimum_usable_lane_rate_pct": 95.0,
             "minimum_average_loop_fps": 5.0,
+            "warmup_stabilized_below_camera_age_s": (
+                CAMERA_STALE_LIMIT_SECONDS
+            ),
             "expected_centered_reference": True,
             "maximum_mean_absolute_offset": 0.08,
             "minimum_mean_lane_confidence": 0.55,
+            "outer_tape_only_operator_confirmation": bool(
+                single_outer_target
+            ),
         },
         "csv": csv_path,
         "evidence_image": image_path if image_written else None,

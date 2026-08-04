@@ -17,11 +17,22 @@ import warnings
 import cv2
 import numpy as np
 
+from single_line_lane import (
+    SINGLE_LINE_DEFAULTS,
+    SINGLE_LINE_DETECTOR_MODE,
+    detect_single_line,
+    validate_single_line_config,
+)
+
 
 DEFAULT_CONFIG_PATH = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "ipm_config.json"
 )
-DETECTOR_IMPLEMENTATION_VERSION = "PAIRED_ROW_POLYNOMIAL_V1"
+DETECTOR_IMPLEMENTATION_VERSION = "PAIRED_ROW_POLYNOMIAL_V2"
+SUPPORTED_DETECTOR_MODES = (
+    DETECTOR_IMPLEMENTATION_VERSION,
+    SINGLE_LINE_DETECTOR_MODE,
+)
 
 
 # These defaults keep existing, physically calibrated schema-v1 configuration
@@ -50,6 +61,20 @@ PAIRED_ROW_DEFAULTS = {
     "maximum_lane_width_variation_fraction": 0.25,
     "lane_width_evaluation_window_fraction": 0.30,
     "valid_roi_erode_px": 5,
+    # A close bend can make one tape rail nearly horizontal.  Horizontal
+    # scan-run pairing then rejects that rail because its apparent run is too
+    # wide.  V2 has a guarded connected-component fallback: both rails must be
+    # individually continuous, overlap around look-ahead, retain a plausible
+    # normal separation, and remain unambiguous.  These limits never relax the
+    # normal detector; they only govern that second, current-frame proof.
+    "close_curve_minimum_pairs": 8,
+    "close_curve_minimum_paired_row_fraction": 0.20,
+    "close_curve_minimum_vertical_coverage_fraction": 0.30,
+    "close_curve_maximum_fit_residual_px": 3.0,
+    "close_curve_maximum_lane_width_variation_fraction": 0.15,
+    "close_curve_minimum_pair_quality": 0.75,
+    "close_curve_maximum_width_error_fraction": 0.35,
+    "close_curve_maximum_raw_row_runs": 8,
 }
 
 
@@ -124,6 +149,7 @@ def load_ipm_config(path=DEFAULT_CONFIG_PATH):
         config = json.load(config_file)
 
     required = (
+        "detector_mode",
         "source_points_normalized",
         "destination_points_normalized",
         "black_threshold",
@@ -142,6 +168,9 @@ def load_ipm_config(path=DEFAULT_CONFIG_PATH):
 
     for key, value in PAIRED_ROW_DEFAULTS.items():
         config.setdefault(key, value)
+    if config.get("detector_mode") == SINGLE_LINE_DETECTOR_MODE:
+        for key, value in SINGLE_LINE_DEFAULTS.items():
+            config.setdefault(key, value)
 
     for key in ("source_points_normalized", "destination_points_normalized"):
         config[key] = _validate_quad(config[key], key)
@@ -158,6 +187,8 @@ def load_ipm_config(path=DEFAULT_CONFIG_PATH):
         "valid_roi_erode_px",
         "maximum_missing_scan_rows",
         "maximum_row_runs",
+        "close_curve_minimum_pairs",
+        "close_curve_maximum_raw_row_runs",
     )
     for key in integer_keys:
         value = config[key]
@@ -190,11 +221,30 @@ def load_ipm_config(path=DEFAULT_CONFIG_PATH):
         raise ValueError("maximum_missing_scan_rows must be in 0..20.")
     if not 4 <= config["maximum_row_runs"] <= 128:
         raise ValueError("maximum_row_runs must be in 4..128.")
-
-    if config["detector_mode"] != DETECTOR_IMPLEMENTATION_VERSION:
+    if not 4 <= config["close_curve_minimum_pairs"] <= 40:
+        raise ValueError("close_curve_minimum_pairs must be in 4..40.")
+    if not (
+        2 <= config["close_curve_maximum_raw_row_runs"]
+        <= config["maximum_row_runs"]
+    ):
         raise ValueError(
-            "detector_mode must be PAIRED_ROW_POLYNOMIAL_V1."
+            "close_curve_maximum_raw_row_runs must be in "
+            "2..maximum_row_runs."
         )
+
+    if config["detector_mode"] not in SUPPORTED_DETECTOR_MODES:
+        raise ValueError(
+            "detector_mode must be one of: {}.".format(
+                ", ".join(SUPPORTED_DETECTOR_MODES)
+            )
+        )
+    if config["detector_mode"] == SINGLE_LINE_DETECTOR_MODE:
+        if config.get("target_line_role") != "OUTER_CIRCLE_CENTERLINE":
+            raise ValueError(
+                "Single-line mode requires target_line_role="
+                "OUTER_CIRCLE_CENTERLINE."
+            )
+        config = validate_single_line_config(config)
 
     vertical_ratio = _strict_number(config, "minimum_vertical_ratio")
     lookahead = _strict_number(config, "lookahead_y_fraction")
@@ -227,6 +277,24 @@ def load_ipm_config(path=DEFAULT_CONFIG_PATH):
     )
     width_window = _strict_number(
         config, "lane_width_evaluation_window_fraction"
+    )
+    close_curve_paired = _strict_number(
+        config, "close_curve_minimum_paired_row_fraction"
+    )
+    close_curve_coverage = _strict_number(
+        config, "close_curve_minimum_vertical_coverage_fraction"
+    )
+    close_curve_residual = _strict_number(
+        config, "close_curve_maximum_fit_residual_px"
+    )
+    close_curve_width_variation = _strict_number(
+        config, "close_curve_maximum_lane_width_variation_fraction"
+    )
+    close_curve_pair_quality = _strict_number(
+        config, "close_curve_minimum_pair_quality"
+    )
+    close_curve_width_error = _strict_number(
+        config, "close_curve_maximum_width_error_fraction"
     )
     if not 1.0 <= vertical_ratio <= 20.0:
         raise ValueError("minimum_vertical_ratio must be in 1..20.")
@@ -282,6 +350,35 @@ def load_ipm_config(path=DEFAULT_CONFIG_PATH):
         raise ValueError(
             "lane_width_evaluation_window_fraction must be in 0.10..1.0."
         )
+    if not 0.10 <= close_curve_paired <= paired_fraction:
+        raise ValueError(
+            "close_curve_minimum_paired_row_fraction must be in "
+            "0.10..minimum_paired_row_fraction."
+        )
+    if not 0.10 <= close_curve_coverage <= vertical_coverage:
+        raise ValueError(
+            "close_curve_minimum_vertical_coverage_fraction must be in "
+            "0.10..minimum_vertical_coverage_fraction."
+        )
+    if not 0.5 <= close_curve_residual <= fit_residual:
+        raise ValueError(
+            "close_curve_maximum_fit_residual_px must be in "
+            "0.5..fit_residual_threshold_px."
+        )
+    if not 0.05 <= close_curve_width_variation <= width_variation:
+        raise ValueError(
+            "close_curve_maximum_lane_width_variation_fraction must be in "
+            "0.05..maximum_lane_width_variation_fraction."
+        )
+    if not 0.50 <= close_curve_pair_quality <= 1.0:
+        raise ValueError(
+            "close_curve_minimum_pair_quality must be in 0.50..1.0."
+        )
+    if not 0.10 <= close_curve_width_error <= pair_width_tolerance:
+        raise ValueError(
+            "close_curve_maximum_width_error_fraction must be in "
+            "0.10..pair_width_tolerance_fraction."
+        )
     return config
 
 
@@ -305,6 +402,19 @@ class IPMLaneDetector(object):
         self.config = load_ipm_config(self.config_path)
         self.remembered_lane_width = None
         self.remembered_lane_centre = None
+        # Camera geometry and the analysis masks are invariant for a given
+        # calibrated detector and frame size.  Building and warping these
+        # full-frame masks on every observation wastes a material part of the
+        # Jetson Nano's 250 ms freshness budget, so prepare them once and
+        # reuse them without changing any detector thresholds or semantics.
+        self._geometry_cache = {}
+        close_kernel_size = int(self.config["close_kernel_size"])
+        self._close_kernel = cv2.getStructuringElement(
+            cv2.MORPH_RECT, (close_kernel_size, close_kernel_size)
+        )
+        self._opening_kernel = cv2.getStructuringElement(
+            cv2.MORPH_RECT, (3, 3)
+        )
 
     @property
     def physically_calibrated(self):
@@ -320,11 +430,43 @@ class IPMLaneDetector(object):
         matrix = cv2.getPerspectiveTransform(source, destination)
         return source, destination, matrix
 
+    def _prepared_geometry(self, width, height):
+        """Return immutable, cached geometry for one camera frame size."""
+        key = (int(width), int(height))
+        prepared = self._geometry_cache.get(key)
+        if prepared is None:
+            source, destination, matrix = self._perspective(width, height)
+            frame_shape = (int(height), int(width), 3)
+            valid_warp_mask = self._valid_warp_mask(
+                frame_shape,
+                matrix,
+                int(self.config["valid_roi_erode_px"]),
+            )
+            analysis_roi_mask = self._analysis_roi_mask(
+                frame_shape, destination
+            )
+            analysis_mask = cv2.bitwise_and(
+                valid_warp_mask, analysis_roi_mask
+            )
+            prepared = {
+                "source": source,
+                "destination": destination,
+                "matrix": matrix,
+                "valid_warp_mask": valid_warp_mask,
+                "analysis_roi_mask": analysis_roi_mask,
+                "analysis_mask": analysis_mask,
+            }
+            self._geometry_cache[key] = prepared
+        return prepared
+
     def warp(self, frame):
         if frame is None or frame.ndim != 3 or frame.shape[2] != 3:
             raise ValueError("Expected a non-empty BGR frame.")
         height, width = frame.shape[:2]
-        source, destination, matrix = self._perspective(width, height)
+        prepared = self._prepared_geometry(width, height)
+        source = prepared["source"]
+        destination = prepared["destination"]
+        matrix = prepared["matrix"]
         # White is deliberately used outside the valid source image.  A black
         # border would otherwise look exactly like the black track tape.
         warped = cv2.warpPerspective(
@@ -358,6 +500,29 @@ class IPMLaneDetector(object):
     def _analysis_roi_mask(self, frame_shape, destination):
         """Return an expanded track ROI that still excludes image extremes."""
         height, width = frame_shape[:2]
+        if self.config["detector_mode"] == SINGLE_LINE_DETECTOR_MODE:
+            x_start = max(0, int(math.floor(
+                width
+                * float(self.config["single_line_roi_left_fraction"])
+            )))
+            x_stop = min(width - 1, int(math.ceil(
+                width
+                * float(self.config["single_line_roi_right_fraction"])
+            )))
+            y_start = max(0, int(math.floor(
+                height
+                * float(self.config["single_line_scan_top_fraction"])
+            )))
+            y_stop = min(height - 1, int(math.ceil(
+                height
+                * float(self.config["single_line_scan_bottom_fraction"])
+            )))
+            roi = np.zeros((height, width), dtype=np.uint8)
+            cv2.rectangle(
+                roi, (x_start, y_start), (x_stop, y_stop), 255, -1
+            )
+            return roi
+
         left_edge = min(float(destination[0][0]), float(destination[3][0]))
         right_edge = max(float(destination[1][0]), float(destination[2][0]))
         bottom_width = abs(float(destination[1][0]) - float(destination[0][0]))
@@ -680,6 +845,377 @@ class IPMLaneDetector(object):
             return None, None, []
         return final_left, final_right, shared_indices
 
+    @staticmethod
+    def _component_edge_fit(points, degree=3):
+        """Fit one continuous component edge without extrapolating support."""
+        if len(points) < degree + 1:
+            return None
+        y_values = np.float64([point[0] for point in points])
+        x_values = np.float64([point[1] for point in points])
+        rank_warning = getattr(np, "RankWarning", None)
+        if rank_warning is None:
+            rank_warning = getattr(
+                getattr(np, "exceptions", None), "RankWarning", Warning
+            )
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("error", rank_warning)
+                coefficients = np.polyfit(y_values, x_values, degree)
+        except (ValueError, rank_warning, np.linalg.LinAlgError):
+            return None
+        if not np.all(np.isfinite(coefficients)):
+            return None
+        residuals = np.abs(np.polyval(coefficients, y_values) - x_values)
+        return {
+            "coefficients": coefficients,
+            "mean_residual": float(np.mean(residuals)),
+            "inlier_fraction": 1.0,
+            "inlier_count": int(len(points)),
+            "inlier_indices": list(range(len(points))),
+        }
+
+    def _component_curve_fallback(
+        self,
+        black_mask,
+        rows,
+        scan_top,
+        scan_bottom,
+        target_y,
+        expected_width,
+        minimum_width,
+        maximum_width,
+    ):
+        """Prove a close curve from two continuous current-frame rail blobs.
+
+        This deliberately does not bridge fragments or infer a missing rail.
+        It accepts only one unambiguous pair of connected components which
+        both reach look-ahead and whose nearest-boundary distance is stable.
+        """
+        height, width = black_mask.shape[:2]
+        scan_span = max(1.0, float(scan_bottom - scan_top))
+        step = int(self.config["scan_row_step_px"])
+        target_tolerance = float(
+            step + int(self.config["scan_band_height_px"]) // 2
+        )
+        minimum_component_span = (
+            scan_span
+            * float(self.config[
+                "close_curve_minimum_vertical_coverage_fraction"
+            ])
+        )
+        minimum_component_area = max(100, int(round(width * height * 0.0035)))
+
+        binary = np.uint8(black_mask > 0)
+        component_count, labels, stats, centroids = (
+            cv2.connectedComponentsWithStats(binary, 8)
+        )
+        candidates = []
+        component_masks = {}
+        maximum_tape_diameter = max(
+            float(self.config["minimum_tape_run_width_px"]),
+            width
+            * float(self.config["maximum_tape_run_width_fraction"]),
+        )
+        for label in range(1, component_count):
+            component_height = int(stats[label, cv2.CC_STAT_HEIGHT])
+            area = int(stats[label, cv2.CC_STAT_AREA])
+            top = int(stats[label, cv2.CC_STAT_TOP])
+            bottom = top + component_height - 1
+            if area < minimum_component_area:
+                continue
+            if component_height < minimum_component_span:
+                continue
+            if (
+                target_y < top - target_tolerance
+                or target_y > bottom + target_tolerance
+            ):
+                continue
+            component_mask = np.uint8(labels == label)
+            # A rail may be almost horizontal and therefore wide in an image
+            # row, but it must remain physically tape-like in its local normal
+            # direction.  Twice the maximum interior distance is the diameter
+            # of the largest circle that fits inside the component.  Filled
+            # dark objects/blobs exceed the configured maximum tape width and
+            # cannot act as either rail.
+            interior_distance = cv2.distanceTransform(
+                component_mask, cv2.DIST_L2, 5
+            )
+            maximum_inscribed_diameter = 2.0 * float(
+                np.max(interior_distance)
+            )
+            if maximum_inscribed_diameter > maximum_tape_diameter:
+                continue
+            component_masks[label] = component_mask
+            candidates.append(label)
+
+        if len(candidates) < 2:
+            return None
+
+        scan_y_values = [int(row["y"]) for row in rows]
+        minimum_rows = max(
+            int(self.config["close_curve_minimum_pairs"]),
+            int(math.ceil(
+                len(rows)
+                * float(self.config[
+                    "close_curve_minimum_paired_row_fraction"
+                ])
+            )),
+        )
+        maximum_raw_runs = max(
+            [int(row["raw_run_count"]) for row in rows] or [0]
+        )
+        if maximum_raw_runs > int(
+            self.config["close_curve_maximum_raw_row_runs"]
+        ):
+            return None
+
+        accepted_pairs = []
+        for left_label in candidates:
+            for right_label in candidates:
+                if left_label == right_label:
+                    continue
+                if not (
+                    float(centroids[left_label][0])
+                    < float(centroids[right_label][0])
+                ):
+                    continue
+
+                shared = []
+                shared_presence_rows = 0
+                for y_value in scan_y_values:
+                    left_pixels = np.where(labels[y_value] == left_label)[0]
+                    right_pixels = np.where(labels[y_value] == right_label)[0]
+                    if left_pixels.size == 0 or right_pixels.size == 0:
+                        continue
+                    shared_presence_rows += 1
+                    # Inward component edges describe the drivable gap even
+                    # when the tape itself is almost horizontal in this row.
+                    left_x = float(np.max(left_pixels))
+                    right_x = float(np.min(right_pixels))
+                    lane_width = right_x - left_x
+                    if minimum_width <= lane_width <= maximum_width:
+                        shared.append((y_value, left_x, right_x))
+
+                if len(shared) < minimum_rows or shared_presence_rows <= 0:
+                    continue
+                paired_fraction = float(len(shared)) / max(1.0, float(len(rows)))
+                y_values = [item[0] for item in shared]
+                vertical_coverage = (
+                    float(max(y_values) - min(y_values)) / scan_span
+                )
+                if paired_fraction < float(
+                    self.config["close_curve_minimum_paired_row_fraction"]
+                ):
+                    continue
+                if vertical_coverage < float(
+                    self.config[
+                        "close_curve_minimum_vertical_coverage_fraction"
+                    ]
+                ):
+                    continue
+                lookahead_distance = min(
+                    abs(float(y_value) - float(target_y))
+                    for y_value in y_values
+                )
+                if lookahead_distance > target_tolerance:
+                    continue
+
+                left_points = [(item[0], item[1]) for item in shared]
+                right_points = [(item[0], item[2]) for item in shared]
+                left_fit = self._component_edge_fit(left_points, degree=3)
+                right_fit = self._component_edge_fit(right_points, degree=3)
+                if left_fit is None or right_fit is None:
+                    continue
+                fit_residual = (
+                    float(left_fit["mean_residual"])
+                    + float(right_fit["mean_residual"])
+                ) / 2.0
+                if fit_residual > float(
+                    self.config["close_curve_maximum_fit_residual_px"]
+                ):
+                    continue
+
+                overlap_top = max(scan_top, min(y_values))
+                overlap_bottom = min(scan_bottom, max(y_values))
+                y_grid = np.indices(binary.shape)[0]
+                overlap_mask = (
+                    (y_grid >= overlap_top) & (y_grid <= overlap_bottom)
+                )
+                left_component = component_masks[left_label]
+                right_component = component_masks[right_label]
+                kernel = np.ones((3, 3), dtype=np.uint8)
+                left_boundary = (
+                    cv2.morphologyEx(
+                        left_component, cv2.MORPH_GRADIENT, kernel
+                    )
+                    > 0
+                ) & overlap_mask
+                right_boundary = (
+                    cv2.morphologyEx(
+                        right_component, cv2.MORPH_GRADIENT, kernel
+                    )
+                    > 0
+                ) & overlap_mask
+                if not np.any(left_boundary) or not np.any(right_boundary):
+                    continue
+                distance_to_left = cv2.distanceTransform(
+                    np.uint8(1 - left_component), cv2.DIST_L2, 5
+                )
+                distance_to_right = cv2.distanceTransform(
+                    np.uint8(1 - right_component), cv2.DIST_L2, 5
+                )
+                directed_distributions = (
+                    distance_to_right[left_boundary],
+                    distance_to_left[right_boundary],
+                )
+                separation_options = []
+                for distribution in directed_distributions:
+                    if distribution.size < minimum_rows:
+                        continue
+                    p10, median, p90 = np.percentile(
+                        distribution, [10.0, 50.0, 90.0]
+                    )
+                    variation = float(p90 - p10) / max(1.0, float(median))
+                    separation_options.append(
+                        (variation, float(median), float(p10), float(p90))
+                    )
+                if not separation_options:
+                    continue
+                separation_options.sort(key=lambda item: item[0])
+                separation_variation, normal_width, p10, p90 = (
+                    separation_options[0]
+                )
+                if not minimum_width <= normal_width <= maximum_width:
+                    continue
+                if separation_variation > float(
+                    self.config[
+                        "close_curve_maximum_lane_width_variation_fraction"
+                    ]
+                ):
+                    continue
+                width_error_fraction = abs(
+                    normal_width - expected_width
+                ) / max(1.0, expected_width)
+                if width_error_fraction > float(
+                    self.config["close_curve_maximum_width_error_fraction"]
+                ):
+                    continue
+
+                pair_quality = float(len(shared)) / float(
+                    shared_presence_rows
+                )
+                if pair_quality < float(
+                    self.config["close_curve_minimum_pair_quality"]
+                ):
+                    continue
+
+                left_x = float(np.polyval(
+                    left_fit["coefficients"], target_y
+                ))
+                right_x = float(np.polyval(
+                    right_fit["coefficients"], target_y
+                ))
+                if not (
+                    math.isfinite(left_x)
+                    and math.isfinite(right_x)
+                    and 0.0 <= left_x < right_x <= width - 1
+                    and minimum_width <= right_x - left_x <= maximum_width
+                ):
+                    continue
+
+                support_quality = min(
+                    1.0,
+                    paired_fraction / float(self.config[
+                        "close_curve_minimum_paired_row_fraction"
+                    ]),
+                    vertical_coverage / float(self.config[
+                        "close_curve_minimum_vertical_coverage_fraction"
+                    ]),
+                )
+                stability_quality = clamp(
+                    1.0 - separation_variation / float(self.config[
+                        "close_curve_maximum_lane_width_variation_fraction"
+                    ]),
+                    0.0,
+                    1.0,
+                )
+                width_agreement_quality = clamp(
+                    1.0 - width_error_fraction / float(self.config[
+                        "close_curve_maximum_width_error_fraction"
+                    ]),
+                    0.0,
+                    1.0,
+                )
+                fit_quality = clamp(
+                    1.0 - fit_residual / float(self.config[
+                        "close_curve_maximum_fit_residual_px"
+                    ]),
+                    0.0,
+                    1.0,
+                )
+                score = (
+                    0.30 * support_quality
+                    + 0.25 * stability_quality
+                    + 0.20 * pair_quality
+                    + 0.15 * width_agreement_quality
+                    + 0.10 * fit_quality
+                )
+                traced = []
+                for y_value, edge_left, edge_right in shared:
+                    traced.append(
+                        (
+                            y_value,
+                            {
+                                "left": {
+                                    "x": edge_left,
+                                    "width": 1,
+                                    "quality": pair_quality,
+                                },
+                                "right": {
+                                    "x": edge_right,
+                                    "width": 1,
+                                    "quality": pair_quality,
+                                },
+                                "width": edge_right - edge_left,
+                                "centre": (edge_left + edge_right) / 2.0,
+                                "quality": pair_quality,
+                            },
+                        )
+                    )
+                accepted_pairs.append(
+                    {
+                        "score": float(score),
+                        "traced": traced,
+                        "left_fit": left_fit,
+                        "right_fit": right_fit,
+                        "left_x": left_x,
+                        "right_x": right_x,
+                        "lane_width": right_x - left_x,
+                        "lane_centre": (left_x + right_x) / 2.0,
+                        "normal_lane_width": normal_width,
+                        "paired_fraction": paired_fraction,
+                        "vertical_coverage": vertical_coverage,
+                        "fit_residual": fit_residual,
+                        "lookahead_support_distance": lookahead_distance,
+                        "width_variation": separation_variation,
+                        "pair_quality": pair_quality,
+                        "width_error_fraction": width_error_fraction,
+                        "separation_p10": p10,
+                        "separation_p90": p90,
+                    }
+                )
+
+        if not accepted_pairs:
+            return None
+        accepted_pairs.sort(key=lambda item: item["score"], reverse=True)
+        if (
+            len(accepted_pairs) > 1
+            and accepted_pairs[0]["score"] - accepted_pairs[1]["score"] < 0.10
+        ):
+            # Two similarly convincing rail pairs are ambiguous clutter.
+            return None
+        return accepted_pairs[0]
+
     def _detect_boundaries(self, black_mask, destination):
         """Track two current-frame tape rails without assuming image halves."""
         height, width = black_mask.shape[:2]
@@ -811,7 +1347,11 @@ class IPMLaneDetector(object):
         fit_residual = None
         lookahead_support_distance = None
         status = "LOST"
+        support_mode = "NONE"
+        normal_lane_width = None
         widths = []
+        pair_quality = 0.0
+        width_error_fraction = 1.0
 
         if (
             left_fit is not None
@@ -874,8 +1414,18 @@ class IPMLaneDetector(object):
                 float(left_fit["mean_residual"])
                 + float(right_fit["mean_residual"])
             ) / 2.0
+            pair_qualities = [
+                float(pair["quality"]) for _y, pair in trusted_traced
+            ]
+            pair_quality = (
+                float(np.mean(pair_qualities)) if pair_qualities else 0.0
+            )
+            if plausible_widths and expected_width > 1.0:
+                width_error_fraction = abs(
+                    median_width - expected_width
+                ) / expected_width
 
-            full_geometry = (
+            standard_geometry = (
                 plausible_widths
                 and left_fit["inlier_fraction"] >= minimum_inliers
                 and right_fit["inlier_fraction"] >= minimum_inliers
@@ -890,7 +1440,7 @@ class IPMLaneDetector(object):
                 and run_overflow_fraction
                 <= float(self.config["maximum_run_overflow_row_fraction"])
             )
-            if full_geometry:
+            if standard_geometry:
                 left_x = float(np.polyval(left_fit["coefficients"], target_y))
                 right_x = float(np.polyval(right_fit["coefficients"], target_y))
                 if (
@@ -901,6 +1451,7 @@ class IPMLaneDetector(object):
                     lane_width = right_x - left_x
                     lane_centre = (left_x + right_x) / 2.0
                     status = "FULL"
+                    support_mode = "STANDARD"
                 else:
                     status = "INVALID_WIDTH"
             elif trusted_traced:
@@ -914,6 +1465,41 @@ class IPMLaneDetector(object):
             right_x = None
             lane_width = None
             lane_centre = None
+
+        if status not in ("FULL", "RUN_OVERFLOW"):
+            component_curve = self._component_curve_fallback(
+                black_mask,
+                rows,
+                scan_top,
+                scan_bottom,
+                target_y,
+                expected_width,
+                minimum_width,
+                maximum_width,
+            )
+            if component_curve is not None:
+                status = "FULL"
+                support_mode = "COMPONENT_CURVE"
+                trusted_traced = component_curve["traced"]
+                traced = list(trusted_traced)
+                left_fit = component_curve["left_fit"]
+                right_fit = component_curve["right_fit"]
+                left_x = component_curve["left_x"]
+                right_x = component_curve["right_x"]
+                lane_width = component_curve["lane_width"]
+                lane_centre = component_curve["lane_centre"]
+                normal_lane_width = component_curve["normal_lane_width"]
+                paired_fraction = component_curve["paired_fraction"]
+                vertical_coverage = component_curve["vertical_coverage"]
+                fit_residual = component_curve["fit_residual"]
+                lookahead_support_distance = component_curve[
+                    "lookahead_support_distance"
+                ]
+                width_variation = component_curve["width_variation"]
+                pair_quality = component_curve["pair_quality"]
+                width_error_fraction = component_curve[
+                    "width_error_fraction"
+                ]
 
         # Remembered geometry may associate a single observed rail, but it can
         # never promote that frame to FULL.  The safety supervisor therefore
@@ -952,7 +1538,6 @@ class IPMLaneDetector(object):
         elif status == "LOST" and invalid_width_seen:
             status = "INVALID_WIDTH"
 
-        pair_qualities = [pair["quality"] for _y, pair in trusted_traced]
         left_support = paired_fraction * (
             float(np.mean([
                 pair["left"]["quality"] for _y, pair in trusted_traced
@@ -981,19 +1566,65 @@ class IPMLaneDetector(object):
             )
 
         if status == "FULL":
-            confidence = clamp(
-                0.15
-                + 0.30 * paired_fraction
-                + 0.20 * vertical_coverage
-                + 0.20 * fit_quality
-                + 0.15 * width_quality,
-                0.0,
-                1.0,
+            if support_mode == "COMPONENT_CURVE":
+                support_quality = clamp(
+                    min(
+                        paired_fraction / float(self.config[
+                            "close_curve_minimum_paired_row_fraction"
+                        ]),
+                        vertical_coverage / float(self.config[
+                            "close_curve_minimum_vertical_coverage_fraction"
+                        ]),
+                    ),
+                    0.0,
+                    1.0,
+                )
+                width_stability_quality = clamp(
+                    1.0
+                    - width_variation / float(self.config[
+                        "close_curve_maximum_lane_width_variation_fraction"
+                    ]),
+                    0.0,
+                    1.0,
+                )
+                width_agreement_quality = clamp(
+                    1.0
+                    - width_error_fraction / float(self.config[
+                        "close_curve_maximum_width_error_fraction"
+                    ]),
+                    0.0,
+                    1.0,
+                )
+                confidence = clamp(
+                    0.05
+                    + 0.20 * support_quality
+                    + 0.20 * fit_quality
+                    + 0.20 * pair_quality
+                    + 0.20 * width_stability_quality
+                    + 0.15 * width_agreement_quality,
+                    0.0,
+                    1.0,
+                )
+            else:
+                confidence = clamp(
+                    0.15
+                    + 0.30 * paired_fraction
+                    + 0.20 * vertical_coverage
+                    + 0.20 * fit_quality
+                    + 0.15 * width_quality,
+                    0.0,
+                    1.0,
+                )
+            width_to_remember = (
+                normal_lane_width
+                if normal_lane_width is not None
+                else lane_width
             )
             self.remembered_lane_width = (
-                lane_width
+                width_to_remember
                 if self.remembered_lane_width is None
-                else 0.8 * self.remembered_lane_width + 0.2 * lane_width
+                else 0.8 * self.remembered_lane_width
+                + 0.2 * width_to_remember
             )
             self.remembered_lane_centre = lane_centre
         elif status.startswith("PARTIAL"):
@@ -1006,6 +1637,7 @@ class IPMLaneDetector(object):
 
         return {
             "status": status,
+            "support_mode": support_mode,
             "confidence": float(confidence),
             "left_x": left_x,
             "right_x": right_x,
@@ -1030,9 +1662,8 @@ class IPMLaneDetector(object):
             "right_support": float(clamp(right_support, 0.0, 1.0)),
             "vertical_quality": float(fit_quality),
             "width_quality": float(width_quality),
-            "pair_quality": float(np.mean(pair_qualities))
-            if pair_qualities
-            else 0.0,
+            "pair_quality": float(pair_quality),
+            "width_error_fraction": float(width_error_fraction),
         }
 
     def observe(self, frame):
@@ -1040,13 +1671,10 @@ class IPMLaneDetector(object):
         height, width = warped.shape[:2]
 
         gray = cv2.cvtColor(warped, cv2.COLOR_BGR2GRAY)
-        valid_warp_mask = self._valid_warp_mask(
-            frame.shape,
-            matrix,
-            int(self.config["valid_roi_erode_px"]),
-        )
-        analysis_roi_mask = self._analysis_roi_mask(frame.shape, destination)
-        analysis_mask = cv2.bitwise_and(valid_warp_mask, analysis_roi_mask)
+        prepared = self._prepared_geometry(width, height)
+        valid_warp_mask = prepared["valid_warp_mask"]
+        analysis_roi_mask = prepared["analysis_roi_mask"]
+        analysis_mask = prepared["analysis_mask"]
         gray[analysis_mask == 0] = 255
         blurred = cv2.GaussianBlur(gray, (5, 5), 0)
         _unused_threshold, black_mask = cv2.threshold(
@@ -1056,30 +1684,36 @@ class IPMLaneDetector(object):
             cv2.THRESH_BINARY_INV,
         )
 
-        kernel_size = int(self.config["close_kernel_size"])
-        kernel = cv2.getStructuringElement(
-            cv2.MORPH_RECT, (kernel_size, kernel_size)
-        )
-        black_mask = cv2.morphologyEx(black_mask, cv2.MORPH_CLOSE, kernel)
-
-        opening_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
         black_mask = cv2.morphologyEx(
-            black_mask, cv2.MORPH_OPEN, opening_kernel
+            black_mask, cv2.MORPH_CLOSE, self._close_kernel
+        )
+
+        black_mask = cv2.morphologyEx(
+            black_mask, cv2.MORPH_OPEN, self._opening_kernel
         )
         black_mask = cv2.bitwise_and(black_mask, analysis_mask)
         edges = cv2.Canny(black_mask, 50, 150)
 
-        detection = self._detect_boundaries(black_mask, destination)
+        if self.config["detector_mode"] == SINGLE_LINE_DETECTOR_MODE:
+            detection = detect_single_line(
+                black_mask, destination, self.config
+            )
+        else:
+            detection = self._detect_boundaries(black_mask, destination)
         target_y = detection["target_y"]
         centre_x = width / 2.0
-        left_x = detection["left_x"]
-        right_x = detection["right_x"]
+        left_x = detection.get("left_x")
+        right_x = detection.get("right_x")
         lane_centre = detection["lane_centre"]
         lane_width = detection["lane_width"]
         status = detection["status"]
 
         lane_offset = 0.0
-        if lane_centre is not None:
+        if detection.get("lookahead_offset") is not None:
+            lane_offset = clamp(
+                float(detection["lookahead_offset"]), -1.0, 1.0
+            )
+        elif lane_centre is not None:
             lane_offset = clamp(
                 (lane_centre - centre_x) / max(1.0, centre_x), -1.0, 1.0
             )
@@ -1100,29 +1734,51 @@ class IPMLaneDetector(object):
         )
 
         warped_overlay = warped.copy()
-        for y_value, pair in detection["traced"]:
-            cv2.circle(
-                warped_overlay,
-                (int(round(pair["left"]["x"])), int(y_value)),
-                2,
-                (0, 180, 0),
-                -1,
+        if self.config["detector_mode"] == SINGLE_LINE_DETECTOR_MODE:
+            for y_value, x_value in detection.get("centre_points", []):
+                cv2.circle(
+                    warped_overlay,
+                    (int(round(x_value)), int(y_value)),
+                    2,
+                    (0, 180, 0),
+                    -1,
+                )
+            fits_and_colours = (
+                (detection.get("centre_fit"), (0, 255, 0)),
             )
-            cv2.circle(
-                warped_overlay,
-                (int(round(pair["right"]["x"])), int(y_value)),
-                2,
-                (0, 180, 0),
-                -1,
+        else:
+            for y_value, pair in detection["traced"]:
+                cv2.circle(
+                    warped_overlay,
+                    (int(round(pair["left"]["x"])), int(y_value)),
+                    2,
+                    (0, 180, 0),
+                    -1,
+                )
+                cv2.circle(
+                    warped_overlay,
+                    (int(round(pair["right"]["x"])), int(y_value)),
+                    2,
+                    (0, 180, 0),
+                    -1,
+                )
+            fits_and_colours = (
+                (detection["left_fit"], (0, 255, 0)),
+                (detection["right_fit"], (0, 255, 0)),
             )
-        for fit, colour in (
-            (detection["left_fit"], (0, 255, 0)),
-            (detection["right_fit"], (0, 255, 0)),
-        ):
+        for fit, colour in fits_and_colours:
             if fit is not None:
+                if self.config["detector_mode"] == SINGLE_LINE_DETECTOR_MODE:
+                    fit_top = self.config["single_line_scan_top_fraction"]
+                    fit_bottom = self.config[
+                        "single_line_scan_bottom_fraction"
+                    ]
+                else:
+                    fit_top = self.config["scan_top_fraction"]
+                    fit_bottom = self.config["scan_bottom_fraction"]
                 y_values = range(
-                    int(height * float(self.config["scan_top_fraction"])),
-                    int(height * float(self.config["scan_bottom_fraction"])),
+                    int(height * float(fit_top)),
+                    int(height * float(fit_bottom)),
                     3,
                 )
                 curve = []
@@ -1165,7 +1821,12 @@ class IPMLaneDetector(object):
             "lane_offset": float(lane_offset),
             "confidence": float(confidence),
             "lane_width_px": None if lane_width is None else float(lane_width),
-            "line_count": len(detection["traced"]),
+            "line_count": int(
+                detection.get(
+                    "support_point_count",
+                    len(detection.get("traced", [])),
+                )
+            ),
             "left_x": left_x,
             "right_x": right_x,
             "lookahead_y": target_y,
@@ -1184,6 +1845,8 @@ class IPMLaneDetector(object):
             "vertical_quality": float(vertical_quality),
             "width_quality": float(width_quality),
             "detector_mode": self.config["detector_mode"],
+            "target_line_role": self.config.get("target_line_role"),
+            "support_mode": detection["support_mode"],
             "paired_row_fraction": float(detection["paired_fraction"]),
             "vertical_coverage_fraction": float(
                 detection["vertical_coverage"]
@@ -1201,5 +1864,38 @@ class IPMLaneDetector(object):
             "maximum_raw_row_runs": int(
                 detection["maximum_raw_row_runs"]
             ),
+            "near_field_offset": (
+                float(detection["near_field_offset"])
+                if detection.get("near_field_offset") is not None
+                else float(lane_offset)
+            ),
+            "lookahead_offset": (
+                float(detection["lookahead_offset"])
+                if detection.get("lookahead_offset") is not None
+                else float(lane_offset)
+            ),
+            "centreline_x_px": detection.get("lookahead_x"),
+            "near_field_x_px": detection.get("near_x"),
+            "heading_error_rad": detection.get("heading_error_rad"),
+            "curvature_per_px": detection.get("curvature_per_px"),
+            "fit_inlier_fraction": (
+                detection.get("centre_fit", {}).get("inlier_fraction")
+                if detection.get("centre_fit") is not None
+                else None
+            ),
+            "candidate_count": int(detection.get("candidate_count", 0)),
+            "line_like_component_count": int(
+                detection.get("line_like_component_count", 0)
+            ),
+            "ambiguity_margin": float(
+                detection.get("ambiguity_margin", 0.0)
+            ),
+            "support_point_count": int(
+                detection.get(
+                    "support_point_count",
+                    len(detection.get("traced", [])),
+                )
+            ),
+            "tape_width_px": detection.get("tape_width_px"),
             "calibration_state": self.config.get("calibration_state", "UNKNOWN"),
         }

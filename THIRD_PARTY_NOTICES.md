@@ -8,6 +8,7 @@ the third-party YOLOv5 source tree or model weights.
 - Upstream repository: <https://github.com/ultralytics/yolov5>
 - Release tag: `v6.0`
 - Pinned commit: `956be8e642b5c10af4a1533e09084ca32ff4f21f`
+- Upstream licence at that revision: GNU General Public License v3.0
 - Provisioning helper: `prepare_yolov5_v6.py`
 - Expected `yolov5n.pt` size: `3,952,441 bytes`
 - Expected `yolov5n.pt` SHA-256:
@@ -18,9 +19,10 @@ the third-party YOLOv5 source tree or model weights.
 
 `prepare_yolov5_v6.py` clones the pinned upstream revision, verifies its Git
 identity and downloads the two official release assets with byte-count and
-SHA-256 verification. Review and comply with the `LICENSE` and notices in that
-exact upstream revision before redistribution or deployment. The upstream
-project and weights are not relicensed by this repository.
+SHA-256 verification. YOLOv5 v6.0 is GPL-3.0 software. Review and comply with
+the `LICENSE` and notices in that exact upstream revision before redistribution
+or deployment. The upstream project and weights are not relicensed by this
+repository.
 
 ## NVIDIA JetPack platform components
 

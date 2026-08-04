@@ -79,8 +79,10 @@ python -m py_compile \
   robot_dashboard.py patch_dashboard_camera_rotation.py gst_camera_bridge.py \
   source_integrity.py prepare_yolov5_v6.py jetson_perception_preflight.py \
   yolov5_runtime.py yolo_csi_benchmark.py ipm_lane.py calibrate_ipm.py \
-  install_oval_lane_profile.py test_ipm_lane_synthetic.py \
-  ipm_alignment_diagnostic.py ipm_live_dry_run.py control_core.py \
+  single_line_lane.py install_single_line_profile.py \
+  test_single_line_synthetic.py test_ipm_lane_synthetic.py \
+  ipm_alignment_diagnostic.py ipm_live_dry_run.py \
+  outer_circle_position_validation.py control_core.py \
   motor_mapping.py safe_motor_output.py integration_self_test.py \
   integrated_control_dry_run.py motor_adapter_raised_test.py \
   steering_floor_validation.py validation_manager.py track_run.py \
@@ -269,10 +271,10 @@ Use the terms precisely:
   proof that the system processes that many live frames each second.
 - The camera's configured capture rate is not the achieved detection rate.
 
-Archived values of approximately 4.8 reported loop FPS and 245 ms mean
-inference are **prior test evidence**. Do not present them as a current result
-or assume they came from the same build/configuration unless the archived raw
-files prove that. A 30 FPS statement remains a design target unless a named,
+The retained 2026-07-26 YOLOv5n artifact measured
+`8.283126567668365` complete-window FPS and `93.89088915256971 ms` mean
+inference on physical CSI. It is **prior test evidence** after source changes,
+not a current gate. A 30 FPS statement remains a design target unless a named,
 hash-addressed build measures it end to end.
 
 Record **only the YOLOv5n** current result and immediately verify the gate
@@ -292,58 +294,74 @@ supplied quadrilateral is a normalized seed from the WSL/SITL
 `src/lane/lane_module.py`; it is simulated initialization, not physical
 calibration evidence.
 
-For the oval track, install the paired-row polynomial detector profile before
-calibration. This profile follows two independently observed open tape rails;
-it does not divide candidates at the image centre and does not require a
-horizontal closing line. The installer makes and verifies a timestamped backup,
-preserves the existing physical source/destination points exactly, and marks
-the old calibration as requiring revalidation. First run the hardware-free
-regression, then migrate the configuration:
+This build follows the centreline of one black tape: the **outer circle only**.
+Remove the inner circle or cover it completely before validation. Do not leave
+the inner circle available as a second target: when only one circle is visible,
+a stateless monocular detector cannot prove whether that isolated line is the
+outer or inner circle.
+
+Install the single-line profile before calibration. The installer makes and
+verifies a timestamped backup, preserves existing source/destination geometry,
+marks it for revalidation, resets controller verification, and closes all
+affected gates. First run both hardware-free regressions, then migrate the
+configuration:
 
 ```bash
+python test_single_line_synthetic.py
 python test_ipm_lane_synthetic.py
-python install_oval_lane_profile.py
+python install_single_line_profile.py --dry-run
+python install_single_line_profile.py
 python validation_manager.py show
 ```
 
-The synthetic test must pass the straight, both same-side curve directions,
-concentric-oval, horizontal-crossbar, invalid-width, single-rail,
-blank-after-memory, texture-noise, outside-ROI, fragmented-rail,
-lookahead-without-local-support, candidate-overflow, non-identity perspective,
-asymmetric-outlier, stale-data and fail-safe STOP cases.
+The single-line regression must pass centred and shifted straights, both curve
+directions, immediate loss after a good frame, fragmentation, broad-blob,
+dense-noise, multiple-line ambiguity and wrong-target-takeover rejection.
 After installation, physical motion authorization must be false until the
-affected gates below are rebuilt. The detector's current provisional oval
-lookahead is `0.62` of warped-frame height; tune it only from retained physical
-track evidence, not by bypassing a gate.
+affected gates below are rebuilt.
 
-Place the stationary robot at its final camera height and pitch on the real
-black-tape track. Park it centred on a **straight portion of the oval**, with
-both open longitudinal rails visible ahead. Do not use an oval end, crossbar,
-or curved corner as the calibration target. Then run through VNC:
+At the final camera height and pitch, place a temporary flat rectangular
+ground-plane target in front of the stationary robot with all four corners
+visible. This target is independent of the track tape. Then run through VNC:
 
 ```bash
 python calibrate_ipm.py
 ```
 
-Click the centre of the near-left rail, near-right rail, far-right rail, then
-far-left rail. These are the same geometric BL, BR, TR, TL points, but all four
-must lie on the two open lane boundaries. Press `S` to save, `R` to reset, or
-`Q` to cancel. The tool backs up the previous configuration and saves an
-evidence image.
+Click the near-left, near-right, far-right and far-left target corners in that
+order. Do not click either track circle, the vehicle, or a shadow. Press `S` to
+save, `R` to reset, or `Q` to cancel. The tool backs up the previous
+configuration and saves an evidence image. Remove the temporary target after
+recording physical calibration.
 
-For the live validation, leave the motor battery disconnected and manually
-align the stationary robot centreline with the marked lane centre. Use
-`--expected-centered` only after physically making and checking that alignment;
-the flag records this test condition and is required for `passed=true`.
+For live validation, leave the motor battery disconnected and place the **outer
+tape directly beneath the camera/vehicle centre** on a representative straight.
+The inner circle must be absent or completely covered. `--expected-centered`
+records that physical condition and is required for `passed=true`.
 
 ```bash
 python validation_manager.py record-ipm-calibration
 python ipm_live_dry_run.py --seconds 30 --headless --expected-centered
-IPM_EVIDENCE="PASTE_THE_EXACT_EVIDENCE_PATH_PRINTED_BY_THIS_IPM_RUN"
-python -m json.tool "$IPM_EVIDENCE"
+IPM_EVIDENCE="$(ls -1t evidence/ipm_dry_run_*.json | head -n 1)"
 python validation_manager.py record ipm_live_dry_run "$IPM_EVIDENCE"
+```
+
+When prompted, type `OUTER-TAPE-ONLY`. A passing aggregate straight run is not
+enough to authorize motion. Validate four representative positions next:
+
+```bash
+python outer_circle_position_validation.py --seconds-per-position 5
+OUTER_EVIDENCE="$(ls -1t evidence/outer_circle_positions_*.json | head -n 1)"
+python validation_manager.py record outer_circle_positions "$OUTER_EVIDENCE"
 python validation_manager.py show
 ```
+
+Keep motor power disconnected. At each prompt, manually place the vehicle
+tangent to the intended travel direction with the outer tape under the
+camera/vehicle centre, then enter `READY-STRAIGHT`, `READY-CURVE_ENTRY`,
+`READY-CURVE_APEX` and `READY-CURVE_EXIT` respectively. Every accepted sample
+must be fresh, `FULL`, confidence at least `0.55`, have exactly one candidate,
+and remain inside the near-field offset bound.
 
 The IPM diagnostic passes only with at least 50 frames, 90% `FULL` lane,
 95% usable lane, 5 FPS, mean confidence at least 0.55, and mean absolute
@@ -354,16 +372,16 @@ lanes may contribute to diagnostic availability metrics, but
 `PARTIAL_*` observation never authorizes physical motion in this build. Only a
 confident `FULL` lane may reach `DRIVE`.
 
-Before the 30-second gate run, use the diagnostic on the stationary robot at a
-straight, curve-entry, curve-apex and curve-exit pose in both turn directions:
+Before recording the gates, the visible diagnostic may be used at each
+stationary pose:
 
 ```bash
 python ipm_alignment_diagnostic.py --warmup-seconds 3 --seconds 10 --headless
 ```
 
-At every pose, inspect the saved overlay and mask. Both rails must be traced;
-the status must remain `FULL`, confidence must remain at least `0.55`, and no
-single remembered rail may be described as `FULL`. A diagnostic is not gate
+At every pose, inspect the saved overlay and mask. The outer tape must be the
+only accepted component, status must remain `FULL`, confidence must remain at
+least `0.55`, and `candidate_count` must remain one. A diagnostic is not gate
 evidence and cannot authorize motion.
 
 ## 4. Validate CSI + IPM + YOLO + controller mapping - battery disconnected

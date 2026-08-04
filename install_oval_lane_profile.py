@@ -25,7 +25,7 @@ from ipm_lane import (
 )
 
 
-PROFILE_VERSION = "PAIRED_ROW_POLYNOMIAL_V1"
+PROFILE_VERSION = "PAIRED_ROW_POLYNOMIAL_V2"
 REVALIDATION_STATE = "OVAL_PROFILE_REQUIRES_PHYSICAL_CALIBRATION"
 
 OVAL_PROFILE = {
@@ -51,6 +51,14 @@ OVAL_PROFILE = {
     "lane_width_evaluation_window_fraction": 0.30,
     "valid_roi_erode_px": 5,
     "lookahead_y_fraction": 0.62,
+    "close_curve_minimum_pairs": 8,
+    "close_curve_minimum_paired_row_fraction": 0.20,
+    "close_curve_minimum_vertical_coverage_fraction": 0.30,
+    "close_curve_maximum_fit_residual_px": 3.0,
+    "close_curve_maximum_lane_width_variation_fraction": 0.15,
+    "close_curve_minimum_pair_quality": 0.75,
+    "close_curve_maximum_width_error_fraction": 0.35,
+    "close_curve_maximum_raw_row_runs": 8,
 }
 
 
@@ -95,9 +103,6 @@ def main():
 
     with open(config_path, "r") as config_file:
         config = json.load(config_file)
-
-    # Validate the complete pre-migration document before preserving it.
-    load_ipm_config(config_path)
 
     source_before = json.dumps(
         config.get("source_points_normalized"),
@@ -167,7 +172,9 @@ def main():
             os.fsync(temporary_file.fileno())
 
         # Use the detector's current validator, including its oval-profile
-        # constraints, before the atomic replacement.
+        # constraints, before the atomic replacement.  The existing file may
+        # legitimately identify the previous V1 detector, so it cannot be
+        # passed to the V2-only validator before this migration is applied.
         validated = load_ipm_config(temporary_path)
         if validated.get("calibration_state") == "PHYSICALLY_CALIBRATED":
             raise RuntimeError("Migration failed to invalidate calibration.")

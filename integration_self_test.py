@@ -4,6 +4,7 @@
 from __future__ import print_function
 
 import copy
+import math
 import time
 
 from control_core import (
@@ -211,6 +212,57 @@ def main():
     require(
         partial["reason"] == "PARTIAL_LANE_MOTION_NOT_VALIDATED",
         "Partial lane must remain physically disabled.",
+    )
+    current_yolo = {
+        "has_result": True,
+        "error": None,
+        "age_seconds": 0.01,
+        "source_frame_lag": 0,
+    }
+    clear_path = {"state": "DRIVE", "reason": "PATH_CLEAR"}
+    valid_line = safety.evaluate(
+        "FULL", 0.90, 0.01, current_yolo, clear_path, now=1.2
+    )
+    require(
+        valid_line == {
+            "state": "DRIVE",
+            "reason": "ALL_GATES_VALID",
+            "speed_scale": 1.0,
+        },
+        "A current, unambiguous single line must reach DRIVE.",
+    )
+    for rejected_status in (
+        "LOST",
+        "AMBIGUOUS",
+        "INVALID_GEOMETRY",
+        "RUN_OVERFLOW",
+    ):
+        rejected = safety.evaluate(
+            rejected_status,
+            0.90,
+            0.01,
+            current_yolo,
+            clear_path,
+            now=1.3,
+        )
+        require(
+            rejected["state"] == "STOP"
+            and rejected["reason"] == "LANE_{}".format(rejected_status),
+            "{} did not fail safe.".format(rejected_status),
+        )
+    low_confidence = safety.evaluate(
+        "FULL", 0.549, 0.01, current_yolo, clear_path, now=1.4
+    )
+    require(
+        low_confidence["reason"] == "LANE_CONFIDENCE_LOW",
+        "Sub-threshold single-line confidence was accepted.",
+    )
+    invalid_confidence = safety.evaluate(
+        "FULL", float("nan"), 0.01, current_yolo, clear_path, now=1.5
+    )
+    require(
+        invalid_confidence["reason"] == "LANE_CONFIDENCE_INVALID",
+        "Non-finite single-line confidence was accepted.",
     )
 
     output = SafeMotorOutput(

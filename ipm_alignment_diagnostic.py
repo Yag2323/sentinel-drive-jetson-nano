@@ -50,17 +50,25 @@ def make_composite(observation, post_age_seconds, processing_ms, phase):
 
     status = observation["status"]
     status_colour = (40, 220, 70) if status == "FULL" else (0, 190, 255)
-    if status in ("LOST", "INVALID_WIDTH"):
+    if status in (
+        "LOST",
+        "INVALID_WIDTH",
+        "INVALID_GEOMETRY",
+        "AMBIGUOUS",
+        "RUN_OVERFLOW",
+    ):
         status_colour = (50, 50, 255)
 
-    line_one = "{} | {} | conf {:.3f} | offset {:+.3f}".format(
+    line_one = "{} | {} | conf {:.3f} | steer {:+.3f}".format(
         phase,
         status,
         float(observation["confidence"]),
         float(observation["lane_offset"]),
     )
-    line_two = "lines {} | process {:.1f} ms | source age {:.1f} ms".format(
+    line_two = "support {} | near {:+.3f} | candidates {} | {:.1f} ms / age {:.1f} ms".format(
         int(observation["line_count"]),
+        float(observation.get("near_field_offset", 0.0)),
+        int(observation.get("candidate_count", 0)),
         float(processing_ms),
         float(post_age_seconds) * 1000.0,
     )
@@ -153,6 +161,8 @@ def main():
         CAMERA_STALE_LIMIT_SECONDS * 1000.0
     ))
     print("Remove any blanket or camera cover before continuing.")
+    print("Remove or fully mask the inner circle for single-line validation.")
+    print("Place the OUTER tape under the camera/vehicle centre.")
     print("Keep the motor battery physically disconnected.")
     print("=" * 68)
 
@@ -299,6 +309,8 @@ def main():
         "error": error_text,
         "config_path": os.path.abspath(arguments.config),
         "calibration_state": detector.config.get("calibration_state"),
+        "detector_mode": detector.config.get("detector_mode"),
+        "target_line_role": detector.config.get("target_line_role"),
         "camera_stale_limit_s_unchanged": CAMERA_STALE_LIMIT_SECONDS,
         "lane_confidence_minimum_unchanged": LANE_CONFIDENCE_MINIMUM,
         "warmup_seconds": arguments.warmup_seconds,
@@ -330,6 +342,14 @@ def main():
         ),
         "last_offset": (
             float(last_observation["lane_offset"])
+            if last_observation is not None else None
+        ),
+        "last_near_field_offset": (
+            float(last_observation["near_field_offset"])
+            if last_observation is not None else None
+        ),
+        "last_candidate_count": (
+            int(last_observation["candidate_count"])
             if last_observation is not None else None
         ),
         "best_image": best_path if best_written else None,

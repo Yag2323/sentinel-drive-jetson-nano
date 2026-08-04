@@ -29,13 +29,17 @@ $files = @(
     "yolov5_runtime.py",
     "yolo_csi_benchmark.py",
     "ipm_lane.py",
+    "single_line_lane.py",
     "calibrate_ipm.py",
-    "install_oval_lane_profile.py",
+    "install_single_line_profile.py",
     "test_ipm_lane_synthetic.py",
+    "test_single_line_synthetic.py",
     "ipm_alignment_diagnostic.py",
     "ipm_live_dry_run.py",
+    "outer_circle_position_validation.py",
     "control_core.py",
     "motor_mapping.py",
+    "manual_motor_control.py",
     "safe_motor_output.py",
     "integration_self_test.py",
     "integrated_control_dry_run.py",
@@ -43,6 +47,8 @@ $files = @(
     "steering_floor_validation.py",
     "validation_manager.py",
     "track_run.py",
+    "guarded_live_circle_run.py",
+    "guarded_straight_line_run.py",
     "analyse_track_run.py",
     "promote_controller_tuning.py",
     "make_build_manifest.py",
@@ -94,13 +100,20 @@ if ($remoteDashboardHash -ne $localDashboardHash) {
 Write-Host "Dashboard SHA-256 verified: $remoteDashboardHash"
 
 Write-Host "Transfer complete. Existing motor/IPM configs were not sent."
-Write-Host "The installer preserves IPM/motor calibration, safely resets provisional controller settings, and resets validation gates after code changes."
+Write-Host "The single-line profile installer preserves the current homography points but invalidates calibration, controller tuning, and gate evidence because detector semantics changed."
 Write-Host "On the Jetson, run:"
 Write-Host "  cd ~/ai_robot_car"
 Write-Host "  source venv_jetson/bin/activate"
 Write-Host "  python install_motor_calibration.py"
 Write-Host "  python install_integration_bundle.py"
+Write-Host "  python install_single_line_profile.py --dry-run"
+Write-Host "  python install_single_line_profile.py"
 Write-Host "  python prepare_yolov5_v6.py"
+Write-Host "  python test_single_line_synthetic.py"
 Write-Host "  python validation_manager.py record-self-test"
 Write-Host "  python validation_manager.py show"
+Write-Host "  # After calibration and the centred IPM dry-run gate:"
+Write-Host "  python outer_circle_position_validation.py --seconds-per-position 5"
+Write-Host "  `$OUTER_EVIDENCE=`$(ls -1t evidence/outer_circle_positions_*.json | head -n 1)"
+Write-Host "  python validation_manager.py record outer_circle_positions `"`$OUTER_EVIDENCE`""
 Write-Host "  python make_build_manifest.py"

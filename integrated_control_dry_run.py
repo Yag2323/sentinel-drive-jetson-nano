@@ -120,6 +120,11 @@ def main():
         "lane_status",
         "lane_confidence",
         "lane_offset",
+        "near_field_offset",
+        "lookahead_offset",
+        "heading_error_rad",
+        "curvature_per_px",
+        "candidate_count",
         "lane_width_px",
         "yolo_has_result",
         "yolo_age_s",
@@ -326,6 +331,21 @@ def main():
                     "lane_status": observation["status"],
                     "lane_confidence": round(observation["confidence"], 4),
                     "lane_offset": round(observation["lane_offset"], 6),
+                    "near_field_offset": round(
+                        observation["near_field_offset"], 6
+                    ),
+                    "lookahead_offset": round(
+                        observation["lookahead_offset"], 6
+                    ),
+                    "heading_error_rad": (
+                        "" if observation["heading_error_rad"] is None
+                        else round(observation["heading_error_rad"], 7)
+                    ),
+                    "curvature_per_px": (
+                        "" if observation["curvature_per_px"] is None
+                        else round(observation["curvature_per_px"], 9)
+                    ),
+                    "candidate_count": observation["candidate_count"],
                     "lane_width_px": "" if observation["lane_width_px"] is None else round(observation["lane_width_px"], 3),
                     "yolo_has_result": int(yolo_state["has_result"]),
                     "yolo_age_s": "" if not yolo_state["has_result"] else round(yolo_state["age_seconds"], 3),
@@ -496,6 +516,8 @@ def main():
         "yolo_device": str(yolo_detector.device),
         "yolo_fp16": bool(yolo_detector.use_half),
         "ipm_calibration_state": lane_detector.config.get("calibration_state"),
+        "detector_mode": lane_detector.config.get("detector_mode"),
+        "target_line_role": lane_detector.config.get("target_line_role"),
         "default_ipm_config_used": default_ipm_config_used,
         "frames": frame_number,
         "full_lane_rate_pct": full_rate,

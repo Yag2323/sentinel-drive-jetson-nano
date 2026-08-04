@@ -10,8 +10,11 @@ Source availability is not authorization to energize it.
 - `controller_config.json` contains software initial values, not physically
   tuned gains.
 - `ipm_config.json` contains an SITL seed, not a physical camera calibration.
-- `manual_motor_control.py` and current physical evidence/results are absent.
-- A continuous rounded-oval lap is **PROVISIONAL / NOT VERIFIED**.
+- The recovered `manual_motor_control.py` exposes the PCA9685/INA219 adapter,
+  but no current gate is accepted by the fail-closed public seed.
+- Retained prior physical evidence is summarized in the evidence register; it
+  does not authorize this source identity.
+- A continuous single-line circle lap is **PROVISIONAL / NOT VERIFIED**.
 
 Do not run a physical motor test from this public snapshot.
 
@@ -55,7 +58,7 @@ hardware failure.
 
 ## Required evidence chain
 
-Physical motion remains prohibited until all eight gate records are current,
+Physical motion remains prohibited until all nine gate records are current,
 their evidence and artifact hashes match, and the operator explicitly confirms
 the bounded run:
 
@@ -64,12 +67,18 @@ the bounded run:
 3. current YOLO CSI regression;
 4. physical IPM calibration;
 5. live IPM dry run;
-6. integrated control dry run;
-7. raised-wheel motor adapter;
-8. short floor steering.
+6. four-position outer-circle validation;
+7. integrated control dry run;
+8. raised-wheel motor adapter;
+9. short floor steering.
 
 The ordered procedure and exact confirmation strings are documented in
 `docs/INTEGRATION_RUNBOOK.md`.
+
+`track_run.py`, `guarded_live_circle_run.py` and
+`guarded_straight_line_run.py` are included in the authorization artifact
+snapshot. Each refuses motor initialization unless the current gate evidence
+and source hashes still authorize motion.
 
 ## Battery and electrical safety
 

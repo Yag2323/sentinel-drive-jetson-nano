@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Interactively calibrate the real-camera IPM quadrilateral; no motor access."""
+"""Calibrate the camera-to-ground IPM using a four-corner floor target.
+
+The calibration target is deliberately independent of the line that the
+vehicle follows.  This keeps the same ground-plane transform valid when the
+single outer-circle centreline bends through the camera view.
+"""
 
 from __future__ import print_function
 
@@ -19,17 +24,17 @@ from validation_manager import capture_artifact_snapshot
 
 
 POINT_LABELS = (
-    "NEAR LEFT RAIL (BOTTOM LEFT)",
-    "NEAR RIGHT RAIL (BOTTOM RIGHT)",
-    "FAR RIGHT RAIL (TOP RIGHT)",
-    "FAR LEFT RAIL (TOP LEFT)",
+    "NEAR LEFT TARGET CORNER (BOTTOM LEFT)",
+    "NEAR RIGHT TARGET CORNER (BOTTOM RIGHT)",
+    "FAR RIGHT TARGET CORNER (TOP RIGHT)",
+    "FAR LEFT TARGET CORNER (TOP LEFT)",
 )
 
 DISPLAY_LABELS = (
-    "1: NEAR LEFT RAIL",
-    "2: NEAR RIGHT RAIL",
-    "3: FAR RIGHT RAIL",
-    "4: FAR LEFT RAIL",
+    "1: NEAR LEFT TARGET CORNER",
+    "2: NEAR RIGHT TARGET CORNER",
+    "3: FAR RIGHT TARGET CORNER",
+    "4: FAR LEFT TARGET CORNER",
 )
 
 
@@ -56,13 +61,14 @@ def main():
     points = []
 
     print("IPM CALIBRATION - MOTORS ARE NOT ACCESSED")
-    print("Park the robot centred on a STRAIGHT portion of the oval lane.")
-    print("Both open left/right tape rails must be visible ahead of the camera.")
-    print("Select the CENTRE of each tape rail in this exact order:")
+    print("Physically disconnect the motor battery before continuing.")
+    print("Place a temporary rectangular four-corner target flat on the floor.")
+    print("Centre the stationary robot behind it with all corners visible.")
+    print("Select the four FLOOR-TARGET CORNERS in this exact order:")
     for index, label in enumerate(POINT_LABELS, 1):
         print("  {}. {}".format(index, label))
-    print("The four points must outline the open lane corridor ahead.")
-    print("DO NOT select a crossbar, end closure, corner, or curved section.")
+    print("The points calibrate the ground plane; they are not track points.")
+    print("Do not click the outer circle, inner circle, vehicle, or a shadow.")
     print("After four points: S saves, R resets, Q cancels.")
 
     camera = GstCamera(
@@ -96,7 +102,7 @@ def main():
         camera.close()
 
     original = frame.copy()
-    window_name = "Oval IPM - straight rails only - BL, BR, TR, TL"
+    window_name = "IPM ground target - BL, BR, TR, TL"
 
     def on_mouse(event, x, y, flags, parameter):
         del flags, parameter
@@ -130,7 +136,7 @@ def main():
         )
         cv2.putText(
             display,
-            "OVAL STRAIGHT: NO ENDS / CROSSBARS / CORNERS",
+            "GROUND TARGET ONLY - NOT THE FOLLOWED TAPE LINE",
             (12, height - 16),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.46,
@@ -259,6 +265,10 @@ def main():
                     "destination_points_normalized": destination,
                     "homography_matrix": homography.tolist(),
                     "detector_mode": validated_candidate["detector_mode"],
+                    "target_line_role": validated_candidate.get(
+                        "target_line_role"
+                    ),
+                    "calibration_target": "FOUR_CORNER_GROUND_PLANE_TARGET",
                     "code_artifact_sha256_start": code_snapshot_start,
                     "code_artifact_sha256_end": code_snapshot_end,
                     "artifact_snapshot_stable": True,
