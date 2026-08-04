@@ -156,10 +156,9 @@ display values are used here; exact values and SHA-256 identifiers are in the
 |---|---|
 | ![YOLOv5n chair detection evidence](docs/images/evidence-yolov5n-csi.jpg) | ![Integrated perception and control dry-run evidence](docs/images/evidence-integrated-dry-run.jpg) |
 
-Test props include a miniature stop sign used while evaluating the generic COCO
-class; this was not a custom-trained traffic-sign model.
-
-![Miniature road-sign props including a stop sign](docs/images/stop-sign-test-props.jpg)
+The repository documents the generic COCO stop-sign recognition policy in code.
+An actual recognition output from the Jetson will replace the former test-prop
+photograph after its evidence files have been audited.
 
 ## Safe software-only verification
 

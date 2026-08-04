@@ -49,9 +49,8 @@ accuracy result.
 
 The implemented current policy is independently visible in
 `yolov5_runtime.py`: a fresh COCO `stop sign` detection returns
-`STOP_SIGN_DETECTED`. The test prop is shown below.
-
-![Miniature road-sign props including a stop sign](images/stop-sign-test-props.jpg)
+`STOP_SIGN_DETECTED`. A physical recognition image will be added only after the
+corresponding Jetson result has been audited and its provenance recorded.
 
 ### Drivetrain calibration
 

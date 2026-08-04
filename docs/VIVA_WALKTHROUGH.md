@@ -88,9 +88,10 @@ Use this sentence if asked about obstacle avoidance:
 > around an obstacle or re-plan a route, so I call it obstacle response rather
 > than obstacle-avoidance navigation.
 
-Show `docs/images/evidence-yolov5n-csi.jpg` and
-`docs/images/stop-sign-test-props.jpg`. State that the stop sign is the generic
-pretrained COCO class, not a custom-trained model.
+Show `docs/images/evidence-yolov5n-csi.jpg`, then open the decision mapping in
+`yolov5_runtime.py`. State that the stop sign is the generic pretrained COCO
+class, not a custom-trained model. Only show a physical stop-sign recognition
+image after its matching Jetson result has been audited.
 
 ## 5. Show the safety boundary
 
