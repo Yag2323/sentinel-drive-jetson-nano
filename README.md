@@ -8,7 +8,7 @@
 [![Safety](https://img.shields.io/badge/motion-fail%20closed-E85D75)](SAFETY.md)
 
 Sentinel Drive is a final-year engineering prototype that combines a CSI
-camera, black-tape line perception, asynchronous YOLOv5 object detection, obstacle avoidance
+camera, black-tape line perception, asynchronous YOLOv5 object detection, obstacle avoidance,
 differential-drive control, battery monitoring and hash-bound validation
 gates. The dashboard is read-only; every physical runner is designed to stop
 when perception, timing, voltage or command freshness becomes unsafe.
