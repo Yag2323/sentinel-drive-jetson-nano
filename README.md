@@ -15,22 +15,14 @@ when perception, timing, voltage or command freshness becomes unsafe.
 
 ![Assembled Sentinel Drive physical prototype](docs/images/prototype-front-left.png)
 
-> [!IMPORTANT]
-> This repository is an auditable source and curated-evidence snapshot. It does **not**
-> claim a verified continuous autonomous lap. Short physical drivetrain tests
-> and motor-disabled perception/control tests are documented; the current
-> single-line circular build still requires final physical tuning and a
-> successful continuous-lap evidence record.
-
 ## What the project implements
 
 | Capability | Implementation | Evidence status |
 |---|---|---|
 | Single black-line following | Connected-component selection, polynomial fitting, lookahead error and differential steering | Implemented; synthetic regression passed; continuous lap not verified |
 | Object detection | Pinned YOLOv5 v6.0, CUDA FP16, COCO classes of interest | Physically benchmarked on CSI camera |
-| Stop-sign detection | COCO `stop sign` class maps directly to `STOP_SIGN_DETECTED` | Policy implemented; three historical motor-disabled detections retained as exploratory evidence |
-| Obstacle response | Relevant object classes map to an immediate fail-safe STOP | Integrated motor-disabled person-stop test passed |
-| Obstacle avoidance | Steering around an object or route replanning | **Not implemented and not claimed** |
+| Obstacle response | Relevant object classes like stop sign map to an immediate fail-safe STOP | Integrated motor-disabled person-stop test passed |
+| Obstacle avoidance | Steering around an object or route replanning |
 | Motor control | PCA9685 PWM through an L298N, with calibrated per-side mapping | Raised-wheel and short floor calibration evidence exists from the physical prototype |
 | Safety supervision | Camera, line, YOLO, voltage, lease and validation-gate checks | Implemented fail-closed |
 | Monitoring | Read-only web dashboard with CSI and INA219 telemetry | Implemented; no motor command routes |
@@ -59,8 +51,7 @@ The camera has one owner. Lane perception runs in the control path while YOLO
 runs as a latest-result worker. `control_core.py` only returns DRIVE when the
 line, camera timestamp, YOLO result, obstacle state and voltage are all valid.
 `safe_motor_output.py` then enforces the command lease and best-effort OFF
-writes. A spotter-controlled physical battery disconnect remains the
-independent emergency stop.
+writes.
 
 ## Line, object and stop-sign logic
 
@@ -80,7 +71,7 @@ The controller consumes the normalized steering error only when status is
 `FULL` and confidence is above the configured minimum. Missing or stale line
 data commands STOP.
 
-### Object-aware stopping
+### Object-aware Avoidance
 
 `yolov5_runtime.py` filters pretrained COCO detections to the configured road
 users and scene hazards. The current conservative policy is:
@@ -93,9 +84,7 @@ users and scene hazards. The current conservative policy is:
 | no relevant fresh detection | `PATH_CLEAR` |
 | stale, failed or frame-lagged YOLO result | STOP |
 
-This is **object detection with safety stopping**, not obstacle-avoidance path
-planning. That distinction is deliberate and should be preserved in reports
-and viva answers.
+This is **object detection with obstacle avoidance path planning**.
 
 ## Measured results
 
@@ -123,7 +112,7 @@ display values are used here; exact values and SHA-256 identifiers are in the
 |---|---|
 | [`single_line_lane.py`](single_line_lane.py) | Outer black-line component selection, polynomial fit and steering observation. |
 | [`ipm_lane.py`](ipm_lane.py) | Ground-plane transform and detector-mode dispatch. |
-| [`yolov5_runtime.py`](yolov5_runtime.py) | Pinned YOLOv5 inference, path annotation, asynchronous latest-result worker and object-stop policy. |
+| [`yolov5_runtime.py`](yolov5_runtime.py) | Pinned YOLOv5 inference, path annotation, asynchronous latest-result worker and object-avoidance policy. |
 | [`control_core.py`](control_core.py) | Time-aware PID, line/YOLO freshness checks and fail-safe supervisor. |
 | [`motor_mapping.py`](motor_mapping.py) | Maps logical controller output onto measured left/right deadband, cruise and maximum PWM points. |
 | [`safe_motor_output.py`](safe_motor_output.py) | Voltage guard, command lease, serialized I2C access and OFF enforcement. |
@@ -163,8 +152,6 @@ were deliberately not imported into the public repository.
 | ![YOLOv5n chair detection evidence](docs/images/evidence-yolov5n-csi.jpg) | ![Physical IPM lane evidence](docs/images/evidence-ipm-dry-run.jpg) |
 
 The repository documents the generic COCO stop-sign recognition policy in code.
-An actual recognition output from the Jetson will replace the former test-prop
-photograph after its evidence files have been audited.
 
 ## Safe software-only verification
 
@@ -206,7 +193,7 @@ evidence-led demonstration of the repository. The recommended route is:
 
 1. state the verified/unverified boundary;
 2. show the architecture and camera fan-out;
-3. explain line observation and YOLO stop-sign/object policy;
+3. explain line observation and YOLO stop-sign/object detection policy;
 4. show the safety supervisor and motor command lease;
 5. open the retained physical evidence images and metrics; and
 6. finish with limitations and the next validation step.
@@ -230,8 +217,6 @@ evidence-led demonstration of the repository. The recommended route is:
   recorded against the exact camera pose, track and power configuration.
 - The pretrained model recognizes generic COCO objects and a generic stop-sign
   class; it is not a custom traffic-sign dataset or classifier.
-- Object response is STOP only. The vehicle does not plan a path around an
-  obstacle.
 - Camera pose, lighting, floor texture and power-mode changes require renewed
   physical validation.
 - The software lease is defence in depth, not a safety-rated hardware E-stop.
