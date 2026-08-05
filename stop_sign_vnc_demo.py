@@ -52,6 +52,11 @@ def main():
     parser.add_argument("--img-size", type=int, default=320)
     parser.add_argument("--confidence", type=float, default=0.45)
     parser.add_argument("--iou", type=float, default=0.45)
+    parser.add_argument(
+        "--headless",
+        action="store_true",
+        help="Run through SSH without opening a desktop window.",
+    )
     arguments = parser.parse_args()
 
     if not 5.0 <= arguments.seconds <= 600.0:
@@ -93,7 +98,11 @@ def main():
     print("=" * 68)
     print("STOP-SIGN VNC DEMO - PHYSICAL MOTOR MODULES ARE NOT IMPORTED")
     print("The car remains idle. Keep the motor battery disconnected.")
-    print("Show a printed stop sign to the CSI camera; press Q to finish.")
+    if arguments.headless:
+        print("SSH-only mode: no desktop or VNC window will be opened.")
+        print("Show a printed stop sign to the CSI camera; Ctrl+C finishes.")
+    else:
+        print("Show a printed stop sign to the CSI camera; press Q to finish.")
     print("A genuine stop-sign frame is saved automatically.")
     print("=" * 68)
 
@@ -217,9 +226,10 @@ def main():
                         summary_file.write("\n")
                     print("SAVED: {}".format(image_path))
 
-            cv2.imshow(WINDOW_TITLE, overlay)
-            if cv2.waitKey(1) & 0xFF in (ord("q"), ord("Q")):
-                break
+            if not arguments.headless:
+                cv2.imshow(WINDOW_TITLE, overlay)
+                if (cv2.waitKey(1) & 0xFF) in (ord("q"), ord("Q")):
+                    break
 
     except KeyboardInterrupt:
         print("Interrupted.")
@@ -229,7 +239,8 @@ def main():
     finally:
         if camera is not None:
             camera.close()
-        cv2.destroyAllWindows()
+        if not arguments.headless:
+            cv2.destroyAllWindows()
 
     if stop_sign_detected:
         print("RESULT: STOP SIGN DETECTED; car remained idle.")

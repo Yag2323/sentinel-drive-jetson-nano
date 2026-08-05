@@ -176,6 +176,13 @@ export DISPLAY=:0
 python stop_sign_vnc_demo.py --seconds 120
 ```
 
+VNC is optional. The same detector can run entirely through SSH and still save
+the genuine annotated frame plus JSON sidecar:
+
+```bash
+python stop_sign_vnc_demo.py --seconds 120 --confidence 0.35 --headless
+```
+
 ## Safe software-only verification
 
 The synthetic tests do not open the camera, INA219, PCA9685 or motor driver:
