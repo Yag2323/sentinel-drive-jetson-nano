@@ -134,6 +134,7 @@ display values are used here; exact values and SHA-256 identifiers are in the
 | Path | Purpose |
 |---|---|
 | [`integrated_control_dry_run.py`](integrated_control_dry_run.py) | Exercises lane, YOLO, safety and mapped-duty logic without motor commands. |
+| [`stop_sign_vnc_demo.py`](stop_sign_vnc_demo.py) | Opens a motor-free VNC window, prints `STOP_SIGN_DETECTED`, and saves an annotated frame only when YOLO genuinely returns the COCO `stop sign` class. |
 | [`track_run.py`](track_run.py) | Evidence-gated physical track runner used by the main integration workflow. |
 | [`guarded_live_circle_run.py`](guarded_live_circle_run.py) | Validation-gated single-line circle commissioning runner; continuous-lap verification remains open. |
 | [`guarded_straight_line_run.py`](guarded_straight_line_run.py) | Validation-gated, empty-lane straight-line commissioning runner without YOLO; physically unverified in this snapshot. |
@@ -162,9 +163,18 @@ were deliberately not imported into the public repository.
 |---|---|
 | ![YOLOv5n chair detection evidence](docs/images/evidence-yolov5n-csi.jpg) | ![Physical IPM lane evidence](docs/images/evidence-ipm-dry-run.jpg) |
 
+| Live motor-disabled YOLO interface | Evidence interpretation |
+|---|---|
+| ![Live YOLOv5n object-detection interface with motors disabled](docs/images/live-yolov5-object-detection-interface.png) | The supplied frame demonstrates the live interface and bounding-box path. It labels the presented sign/hand region as `person 0.63`, so it is **not** claimed as successful stop-sign classification. The separate exploratory dry-run log retained three `STOP - STOP SIGN` decisions. |
+
 The repository documents the generic COCO stop-sign recognition policy in code.
-An actual recognition output from the Jetson will replace the former test-prop
-photograph after its evidence files have been audited.
+Use the dedicated motor-free VNC demonstration to produce a new annotated image
+and JSON sidecar only when the detector genuinely returns the `stop sign` class:
+
+```bash
+export DISPLAY=:0
+python stop_sign_vnc_demo.py --seconds 120
+```
 
 ## Safe software-only verification
 

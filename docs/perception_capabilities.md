@@ -24,6 +24,13 @@ single-line perception, not evidence of a completed moving lap.
 
 ## Stop-sign evidence interpretation
 
+![Live motor-disabled YOLO object-detection interface](images/live-yolov5-object-detection-interface.png)
+
+This image demonstrates the VNC interface and bounding-box pipeline. The visible
+label is `person 0.63`, so the image is not used as stop-sign classification
+evidence. A new image becomes admissible only when the saved JSON sidecar reports
+`STOP_SIGN_DETECTED` for the same frame.
+
 The exploratory motor-disabled file
 `combined_perception_20260720_204831.csv` retained three consecutive rows with
 the following relevant fields:

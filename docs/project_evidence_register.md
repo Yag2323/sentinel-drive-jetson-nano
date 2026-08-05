@@ -39,6 +39,13 @@ energising the motors.
 
 ### Stop-sign observation
 
+![Live motor-disabled YOLO object-detection interface](images/live-yolov5-object-detection-interface.png)
+
+The image above is retained as interface evidence only. Its visible detector
+label is `person 0.63`; it does not establish a successful stop-sign
+classification. This distinction prevents a test prop from being promoted into
+an accuracy claim.
+
 The archived motor-disabled exploratory CSV
 `results/combined_perception_20260720_204831.csv` contains three consecutive
 rows, frames 70 to 72, with decision `STOP - STOP SIGN`. Each row reports
@@ -49,8 +56,9 @@ accuracy result.
 
 The implemented current policy is independently visible in
 `yolov5_runtime.py`: a fresh COCO `stop sign` detection returns
-`STOP_SIGN_DETECTED`. A physical recognition image will be added only after the
-corresponding Jetson result has been audited and its provenance recorded.
+`STOP_SIGN_DETECTED`. `stop_sign_vnc_demo.py` provides a motor-free VNC view and
+automatically saves the exact annotated frame plus a JSON sidecar when that
+class is genuinely detected.
 
 ### Drivetrain calibration
 
