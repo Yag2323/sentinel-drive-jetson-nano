@@ -22,7 +22,7 @@ when perception, timing, voltage or command freshness becomes unsafe.
 | Single black-line following | Connected-component selection, polynomial fitting, lookahead error and differential steering | Implemented; synthetic regression passed; continuous lap not verified |
 | Object detection | Pinned YOLOv5 v6.0, CUDA FP16, COCO classes of interest | Physically benchmarked on CSI camera |
 | Obstacle response | Relevant object classes like stop sign map to an immediate fail-safe STOP | Integrated motor-disabled person-stop test passed |
-| Obstacle avoidance | Steering around an object or route replanning |
+| Obstacle avoidance | Steering around an object | Obstacle avoidance after detecting the object at 1m radius |
 | Motor control | PCA9685 PWM through an L298N, with calibrated per-side mapping | Raised-wheel and short floor calibration evidence exists from the physical prototype |
 | Safety supervision | Camera, line, YOLO, voltage, lease and validation-gate checks | Implemented fail-closed |
 | Monitoring | Read-only web dashboard with CSI and INA219 telemetry | Implemented; no motor command routes |
