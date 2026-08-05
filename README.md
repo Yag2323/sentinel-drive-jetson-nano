@@ -186,18 +186,6 @@ Before any physical run, follow the ordered gate sequence in
 controls in [`SAFETY.md`](SAFETY.md). Do not bypass a gate, widen a stale-data
 limit or remove a voltage check merely to obtain motion.
 
-## Viva walkthrough
-
-Use [`docs/VIVA_WALKTHROUGH.md`](docs/VIVA_WALKTHROUGH.md) for a short,
-evidence-led demonstration of the repository. The recommended route is:
-
-1. state the verified/unverified boundary;
-2. show the architecture and camera fan-out;
-3. explain line observation and YOLO stop-sign/object detection policy;
-4. show the safety supervisor and motor command lease;
-5. open the retained physical evidence images and metrics; and
-6. finish with limitations and the next validation step.
-
 ## Documentation
 
 - [Safety contract](SAFETY.md)
