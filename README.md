@@ -79,7 +79,6 @@ users and scene hazards. The current conservative policy is:
 | Detection | Supervisor result |
 |---|---|
 | `stop sign` | `STOP_SIGN_DETECTED` |
-| `traffic light` | `TRAFFIC_LIGHT_UNCLASSIFIED` and STOP |
 | person, bicycle, car, motorcycle, bus, truck or chair | `OBJECT_DETECTED_<CLASS>` and AVOID |
 | no relevant fresh detection | `PATH_CLEAR` |
 | stale, failed or frame-lagged YOLO result | STOP |
